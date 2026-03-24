@@ -27,7 +27,7 @@ class PygameDriver:
             pygame.init()
             self._screen = pygame.display.set_mode((WIDTH, HEIGHT))
             pygame.display.set_caption("Writer Deck")
-            pygame.key.set_repeat(400, 50)
+            pygame.key.set_repeat(500, 100)
             logger.info("PygameDriver initialized (%dx%d)", WIDTH, HEIGHT)
         self._sleeping = False
 

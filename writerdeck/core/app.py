@@ -140,7 +140,7 @@ class App:
             self._hw.name, self._mode.name,
         )
 
-        interval = self._config.render_interval_ms / 1000.0
+        interval = self._hw.render_interval_ms / 1000.0
         tiers = self._config.sleep_tiers
         display_off_secs = tiers.get("display_off_minutes", 5) * 60
         cpu_save_secs = tiers.get("cpu_powersave_minutes", 15) * 60
