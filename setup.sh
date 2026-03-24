@@ -73,6 +73,7 @@ echo "[8/10] Creating venv and installing Python packages..."
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade pip -q
 "$VENV_DIR/bin/pip" install -r "$SCRIPT_DIR/requirements.txt" -q
+"$VENV_DIR/bin/pip" install evdev -q
 
 # 9. Create directories
 echo "[9/10] Creating data directories..."
@@ -81,7 +82,28 @@ mkdir -p ~/.config/writer-deck
 
 # 10. Install systemd service
 echo "[10/10] Installing systemd service..."
-sudo cp "$SCRIPT_DIR/writer-deck.service" /etc/systemd/system/
+sudo tee /etc/systemd/system/writer-deck.service > /dev/null <<EOF
+[Unit]
+Description=Writer Deck Application
+After=local-fs.target
+
+[Service]
+User=$USER
+WorkingDirectory=$SCRIPT_DIR
+ExecStart=$VENV_DIR/bin/python main.py
+SupplementaryGroups=input spi gpio i2c
+Environment="PYTHONPATH=$SCRIPT_DIR/lib"
+Restart=on-failure
+RestartSec=10
+OOMScoreAdjust=-500
+StandardOutput=journal
+WatchdogSec=120
+Type=notify
+NotifyAccess=all
+
+[Install]
+WantedBy=multi-user.target
+EOF
 sudo systemctl daemon-reload
 sudo systemctl enable writer-deck.service
 

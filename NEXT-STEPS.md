@@ -45,7 +45,19 @@ wget -O assets/fonts/Hack-Regular.ttf \
 
 ## On the Pi Zero 2 W
 
-### 6. Run setup.sh
+### 6. Set up SSH key and transfer files
+```bash
+# Generate a key if you don't have one yet
+ssh-keygen -t ed25519 -C "writerdeck-dev" -f ~/.ssh/id_ed25519
+
+# Copy it to the Pi (enter Pi password once)
+ssh-copy-id pi@<PI_IP>
+
+# Transfer project files (skips venv, tests, dev files)
+bash deploy.sh <PI_IP> pi
+```
+
+### 7. Run setup.sh
 ```bash
 chmod +x setup.sh
 ./setup.sh
@@ -54,7 +66,7 @@ chmod +x setup.sh
 # Reboot after for SPI/I2C/BT changes to take effect
 ```
 
-### 7. First hardware test
+### 8. First hardware test
 ```bash
 # Find your keyboard:
 evtest
@@ -67,7 +79,7 @@ python main.py
 # Text should appear on the e-ink display
 ```
 
-### 8. Tune refresh behavior
+### 9. Tune refresh behavior
 Edit `config.yaml`:
 ```yaml
 partial_refresh_max_streak: 20   # lower = more full refreshes (cleaner but slower)
