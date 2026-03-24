@@ -52,6 +52,8 @@ class EPaperDriver:
             logger.info("EPaperDriver sleeping")
 
     def close(self) -> None:
+        if self._epd is not None:
+            self._epd.Clear()
         self.sleep()
 
 
