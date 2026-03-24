@@ -98,7 +98,7 @@ RestartSec=10
 OOMScoreAdjust=-500
 StandardOutput=journal
 WatchdogSec=120
-Type=notify
+Type=simple
 NotifyAccess=all
 
 [Install]

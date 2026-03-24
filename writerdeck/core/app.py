@@ -450,8 +450,7 @@ class App:
         self._power.stop()
         self._file_mgr.force_autosave(self._doc)
         self._session.persist(self._doc.word_count)
-        self._driver.sleep()
-        self._driver.close()
+        self._driver.close()  # close() calls sleep() internally
 
     def _signal_handler(self, signum, frame) -> None:
         self._running = False  # just set flag — cleanup runs after the loop exits
