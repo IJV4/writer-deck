@@ -34,10 +34,9 @@ sudo reboot
 ### On a Dev Machine (WSL/Ubuntu)
 
 ```bash
-sudo apt install python3-dev python3-venv libfreetype6-dev libjpeg-dev fonts-hack-ttf
-python3 -m venv venv
+chmod +x setup-dev.sh
+./setup-dev.sh
 source venv/bin/activate
-pip install -r requirements-dev.txt
 python main.py
 ```
 
@@ -286,15 +285,15 @@ sleep_tiers:
 
 The one-shot setup script handles:
 
-1. System packages (python3-dev, fonts-hack-ttf, image libs)
+1. System packages (python3-dev, fonts-hack-ttf, image libs, evtest)
 2. SPI and I2C enabled in boot config
 3. Bluetooth disabled, HDMI disabled (power savings)
 4. lgpio compiled and installed (Bookworm requirement)
 5. PiSugar daemon installed
 6. Waveshare e-Paper driver cloned to `lib/waveshare_epd/`
-7. Python venv created with dependencies
+7. Python venv created with dependencies (evdev, spidev, gpiozero, lgpio)
 8. Data directories created
-9. Systemd service installed and enabled
+9. Systemd service generated and enabled with the correct user and paths
 
 ### Systemd Service
 
@@ -345,6 +344,16 @@ Coverage reports are generated at `htmlcov/index.html`.
 
 ## Deployment
 
+### First-time SSH setup
+
+```bash
+# Generate a key if you don't have one yet
+ssh-keygen -t ed25519 -C "writerdeck-dev" -f ~/.ssh/id_ed25519
+
+# Copy it to the Pi (enter Pi password once)
+ssh-copy-id pi@<PI_IP>
+```
+
 ### Deploy to Pi
 
 ```bash
@@ -353,7 +362,15 @@ Coverage reports are generated at `htmlcov/index.html`.
 ./deploy.sh 192.168.1.50 myuser     # Custom host and user
 ```
 
-The script rsyncs the project (excluding `.git`, `venv`, `config.yaml`), restarts the service, and tails the log.
+The script rsyncs only the files needed to run the app (excludes `venv`, `tests/`, `config.yaml`, dev tools, and docs). If the systemd service is already installed it restarts automatically; otherwise it prints a reminder to run `setup.sh` first.
+
+### Stopping the app
+
+If the app is unresponsive to Ctrl+C, kill it from another SSH session:
+
+```bash
+ssh pi@<PI_IP> "pkill -f main.py"
+```
 
 ### USB Export
 
@@ -367,7 +384,8 @@ Press **Ctrl+E** to export all documents to a mounted USB drive. The app searche
 writer-deck/
 ├── main.py                         # Entry point
 ├── config_default.yaml             # Default configuration
-├── setup.sh                        # Pi setup script
+├── setup.sh                        # Pi setup script (one-time)
+├── setup-dev.sh                    # Dev machine setup script
 ├── deploy.sh                       # Remote deployment
 ├── writer-deck.service             # Systemd unit
 ├── requirements.txt                # Runtime dependencies

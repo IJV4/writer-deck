@@ -201,6 +201,9 @@ class App:
 
             time.sleep(interval)
 
+        # Main loop exited — run cleanup once
+        self._do_shutdown()
+
     def _handle_action(self, action: KeyAction, char: str) -> bool:
         # If overlay is active, route input there
         if self._overlay is not None:
@@ -437,8 +440,12 @@ class App:
         self.emergency_save()
 
     def _shutdown(self) -> None:
-        logger.info("Shutting down")
+        """Request a clean shutdown — safe to call from anywhere."""
         self._running = False
+
+    def _do_shutdown(self) -> None:
+        """Perform actual cleanup after the main loop exits. Called once."""
+        logger.info("Shutting down")
         self._keyboard.stop()
         self._power.stop()
         self._file_mgr.force_autosave(self._doc)
@@ -447,4 +454,4 @@ class App:
         self._driver.close()
 
     def _signal_handler(self, signum, frame) -> None:
-        self._shutdown()
+        self._running = False  # just set flag — cleanup runs after the loop exits
