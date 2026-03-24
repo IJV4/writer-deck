@@ -73,7 +73,7 @@ echo "[8/10] Creating venv and installing Python packages..."
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade pip -q
 "$VENV_DIR/bin/pip" install -r "$SCRIPT_DIR/requirements.txt" -q
-"$VENV_DIR/bin/pip" install evdev -q
+"$VENV_DIR/bin/pip" install evdev spidev gpiozero lgpio -q
 
 # 9. Create directories
 echo "[9/10] Creating data directories..."

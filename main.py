@@ -7,6 +7,9 @@ import sys
 import traceback
 from pathlib import Path
 
+# Ensure lib/ (waveshare_epd) is on the path regardless of how the app is launched
+sys.path.insert(0, str(Path(__file__).parent / "lib"))
+
 from writerdeck.core.config import load_config
 from writerdeck.core.app import App
 

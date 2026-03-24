@@ -1,6 +1,6 @@
 Pillow>=10.0.0
 PyYAML>=6.0
-# Pi-only hardware deps (not available on all platforms)
-# evdev>=1.7.0
-# spidev>=3.5
+# Pi-only hardware deps (installed explicitly by setup.sh on Pi)
+# evdev>=1.7.0  — installed by setup.sh
+# spidev>=3.5   — installed by setup.sh
 # pisugar>=0.1.1
