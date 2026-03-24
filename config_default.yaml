@@ -1,0 +1,27 @@
+display_model: epd7in5_V2
+font_family: Hack
+font_size: 14
+daily_goal_words: 500
+partial_refresh_max_streak: 20
+render_interval_ms: 500
+idle_full_refresh_seconds: 10
+display_sleep_minutes: 5
+keyboard_device: auto
+keyboard_input: auto  # auto | stdin | evdev | pygame
+mode_order:
+  - distraction_free
+  - dashboard
+  - typewriter
+documents_dir: ~/Documents/writer-deck
+autosave_interval_seconds: 90
+battery_warning_percent: 15
+battery_shutdown_percent: 3
+enable_battery_monitor: true
+pisugar_socket: /tmp/pisugar-server.sock
+log_dir: ~/.config/writer-deck/logs
+show_title_bar: true
+default_format: txt
+sleep_tiers:
+  display_off_minutes: 5
+  cpu_powersave_minutes: 15
+  system_suspend_minutes: 30

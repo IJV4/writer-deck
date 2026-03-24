@@ -1,0 +1,81 @@
+[project]
+name = "writer-deck"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=writerdeck --cov-report=term-missing --cov-report=html"
+
+[tool.coverage.run]
+source = ["writerdeck"]
+omit = [
+    "writerdeck/display/pygame_driver.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+    "pass",
+]
+fail_under = 0
+show_missing = true
+skip_empty = true
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+exclude = [
+    "^lib/",
+    "^venv/",
+    "^tests/",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "evdev.*",
+    "spidev.*",
+    "pisugar.*",
+    "waveshare_epd.*",
+    "pygame.*",
+]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 99
+exclude = [
+    "lib/",
+    "venv/",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "SIM108", # ternary operator (readability preference)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["writerdeck"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

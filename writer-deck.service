@@ -1,0 +1,20 @@
+[Unit]
+Description=Writer Deck Application
+After=local-fs.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/projects/writer-deck
+ExecStart=/home/pi/projects/writer-deck/venv/bin/python main.py
+SupplementaryGroups=input spi gpio i2c
+Environment="PYTHONPATH=/home/pi/projects/writer-deck/lib"
+Restart=on-failure
+RestartSec=10
+OOMScoreAdjust=-500
+StandardOutput=journal
+WatchdogSec=120
+Type=notify
+NotifyAccess=all
+
+[Install]
+WantedBy=multi-user.target
