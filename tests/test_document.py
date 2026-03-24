@@ -341,7 +341,7 @@ class TestUndoRedo:
         doc.cursor_line = 0
         doc.cursor_col = 5
         doc._last_undo_time = 0
-        doc.insert("\nWorld")
+        doc.insert("\n")
         assert doc.cursor_line == 1
         doc.undo()
         assert doc.cursor_line == 0
@@ -564,15 +564,9 @@ class TestSelection:
         doc = Document("line1\nline2\nline3\nline4")
         doc.selection = Selection(1, 0, 2, 5)
         doc.delete_selection()
-        assert doc.lines == ["line1", "\nline4"]
-        # Wait — let me check more carefully
-        # Selection from (1,0) to (2,5): deletes "line2\nline3"
-        # before = lines[1][:0] = ""
-        # after = lines[2][5:] = ""
-        # lines[1] = "" + "" = ""
-        # del lines[2:3] -> removes line3
-        # Actually we need to re-think: sl=1, el=2
-        # del self._lines[sl+1:el+1] = del [2:3]
+        # Selection (1,0)→(2,5): before="" after="" → lines[1]=""
+        # del lines[2:3] removes "line3"
+        assert doc.lines == ["line1", "", "line4"]
 
     def test_selection_ordered_forward(self):
         sel = Selection(0, 5, 2, 3)

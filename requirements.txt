@@ -1,5 +1,6 @@
 Pillow>=10.0.0
-evdev>=1.7.0
 PyYAML>=6.0
-spidev>=3.5
-pisugar>=1.0
+# Pi-only hardware deps (not available on all platforms)
+# evdev>=1.7.0
+# spidev>=3.5
+# pisugar>=0.1.1

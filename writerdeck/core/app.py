@@ -24,6 +24,7 @@ from writerdeck.modes.typewriter import TypewriterMode
 from writerdeck.utils.file_manager import FileManager
 from writerdeck.utils.platform import detect_platform
 from writerdeck.utils.power import Power
+from writerdeck.utils.usb_export import find_usb_mount, export_documents
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +249,6 @@ class App:
             self._refresh.request_full()
             return True
         if action == KeyAction.EXPORT_USB:
-            from writerdeck.utils.usb_export import find_usb_mount, export_documents
             target = find_usb_mount()
             if target:
                 count = export_documents(self._config.documents_dir, target)
