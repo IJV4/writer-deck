@@ -16,7 +16,8 @@ A portable, distraction-free writing device built on Raspberry Pi Zero 2 W with 
 8. [Hardware Setup](#hardware-setup)
 9. [Desktop Development](#desktop-development)
 10. [Deployment](#deployment)
-11. [Project Structure](#project-structure)
+11. [Troubleshooting](#troubleshooting)
+12. [Project Structure](#project-structure)
 
 ---
 
@@ -29,6 +30,21 @@ chmod +x setup.sh
 ./setup.sh
 sudo reboot
 # Writer Deck auto-starts via systemd after reboot
+```
+
+After reboot, configure your keyboard device (one-time):
+
+```bash
+# Find the stable by-id path for your keyboard
+ls /dev/input/by-id/
+# Use the symlink ending in "event-kbd" — avoid "System Control" / "Consumer Control"
+
+cat > ~/writer-deck/config.yaml <<EOF
+keyboard_input: evdev
+keyboard_device: /dev/input/by-id/usb-YOUR_KEYBOARD-event-kbd
+EOF
+
+sudo systemctl restart writer-deck
 ```
 
 ### On a Dev Machine (WSL/Ubuntu)
@@ -261,10 +277,11 @@ log_dir: ~/.config/writer-deck/logs
 ### Example config.yaml
 
 ```yaml
-font_family: JetBrains Mono
-font_size: 16
-daily_goal_words: 1000
-keyboard_input: pygame
+keyboard_input: evdev
+keyboard_device: /dev/input/by-id/usb-qmkbuilder_keyboard-event-kbd
+font_family: Hack
+font_size: 14
+daily_goal_words: 500
 sleep_tiers:
   display_off_minutes: 10
 ```
@@ -375,6 +392,50 @@ ssh pi@<PI_IP> "pkill -f main.py"
 ### USB Export
 
 Press **Ctrl+E** to export all documents to a mounted USB drive. The app searches `/media/` and `/mnt/` for mounted drives and copies all `.txt` and `.md` files to a `writer-deck/` folder on the drive. Autosave files are skipped.
+
+---
+
+## Troubleshooting
+
+### Keyboard not responding
+
+QMK and other multi-interface keyboards expose several event devices (System Control, Consumer Control, mouse). Only the main HID keyboard interface responds to typing. Use the stable by-id path ending in `event-kbd`:
+
+```bash
+ls /dev/input/by-id/
+# e.g. usb-qmkbuilder_keyboard-event-kbd
+```
+
+Avoid using `/dev/input/event*` paths directly — device numbers can shift after a reboot.
+
+### Display shows NullDriver warning
+
+If you see `EPaperDriver unavailable, falling back to NullDriver`, check:
+
+1. SPI is enabled — `ls /dev/spidev*` should show `spidev0.0` and `spidev0.1`. If not, reboot (SPI requires a reboot after `setup.sh`).
+2. Waveshare driver is present — `ls ~/writer-deck/lib/waveshare_epd/epd7in5_V2.py`
+3. Pi-only Python deps are installed — `~/writer-deck/venv/bin/pip show spidev gpiozero lgpio`
+
+### Service keeps restarting
+
+Check logs for the cause:
+
+```bash
+journalctl -u writer-deck -n 50 --no-pager
+```
+
+Common causes:
+- Wrong keyboard device path — update `config.yaml` and restart
+- Missing Python dep — install it into the venv and restart
+- Watchdog timeout — the app must run without crashing for 120 seconds
+
+### App is unresponsive / won't quit
+
+Kill it from another SSH session:
+
+```bash
+ssh pi@<PI_IP> "pkill -f main.py"
+```
 
 ---
 

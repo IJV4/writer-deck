@@ -13,12 +13,9 @@ cd ~/projects/writer-deck
 
 ### 2. Install dependencies
 ```bash
-sudo apt update
-sudo apt install python3-dev python3-venv libfreetype6-dev libjpeg-dev libopenjp2-7-dev fonts-hack-ttf
-python3 -m venv venv
+chmod +x setup-dev.sh
+./setup-dev.sh
 source venv/bin/activate
-pip install Pillow PyYAML pytest
-# evdev, spidev, pisugar are Pi-only — skip on WSL dev machine
 ```
 
 ### 3. Run tests
@@ -68,15 +65,24 @@ chmod +x setup.sh
 
 ### 8. First hardware test
 ```bash
-# Find your keyboard:
+# Find your keyboard device (evtest is installed by setup.sh):
 evtest
-# Note the /dev/input/event* path, put it in config.yaml:
-echo "keyboard_device: /dev/input/by-id/YOUR-KEYBOARD-ID" > config.yaml
+# Look for your keyboard name — avoid entries ending in "System Control"
+# or "Consumer Control", those are auxiliary interfaces.
 
-# Run it:
-source venv/bin/activate
-python main.py
-# Text should appear on the e-ink display
+# Get the stable by-id path (won't change across reboots):
+ls /dev/input/by-id/
+# Use the symlink ending in "event-kbd"
+
+# Write config.yaml:
+cat > ~/writer-deck/config.yaml <<EOF
+keyboard_input: evdev
+keyboard_device: /dev/input/by-id/usb-YOUR_KEYBOARD-event-kbd
+EOF
+
+# Restart the service to pick up config:
+sudo systemctl restart writer-deck
+# Text should appear on the e-ink display and keys should register
 ```
 
 ### 9. Tune refresh behavior
@@ -92,12 +98,12 @@ display_sleep_minutes: 5         # 0 to disable idle sleep
 
 ## Hardware Assembly
 
-### 9. Connect PiSugar 3
+### 10. Connect PiSugar 3
 - Attach PiSugar 3 to the back of Pi Zero via POGO pins (no GPIO conflict with e-ink HAT)
 - Install daemon (setup.sh does this)
 - Test: `python -c "from writerdeck.utils.power import Power; p = Power(); p._update(); print(p.battery_level)"`
 
-### 10. Apply power optimizations
+### 11. Apply power optimizations
 Already in setup.sh, but verify:
 - HDMI disabled: `tvservice -o` in `/etc/rc.local`
 - Bluetooth disabled: `dtoverlay=disable-bt` in `/boot/config.txt`
@@ -107,13 +113,13 @@ Already in setup.sh, but verify:
 
 ## 3D Case
 
-### 11. Measure your assembled stack
+### 12. Measure your assembled stack
 - [ ] Waveshare 7.5" HAT PCB exact dimensions (expect ~170mm × 111mm)
 - [ ] Pi Zero + PiSugar stacked height
 - [ ] SPI ribbon/connector clearance
 - [ ] USB connector type on your keyboard (for port cutout)
 
-### 12. Design enclosure
+### 13. Design enclosure
 - Tool: FreeCAD or Fusion 360
 - Two-part friction-fit or M2.5 screwed enclosure
 - Front shell: display window cutout (163mm × 98mm + 0.2mm tolerance)
@@ -121,7 +127,7 @@ Already in setup.sh, but verify:
 - Material: PETG, 2-3mm walls
 - Total footprint estimate: ~175mm × 115mm × 20-25mm
 
-### 13. Order print
+### 14. Order print
 - Upload STL to JLC3DP, Craftcloud, or Treatstock
 - Add 0.2mm clearance on component seats, 0.3mm on port cutouts
 
@@ -129,18 +135,19 @@ Already in setup.sh, but verify:
 
 ## Polish (after end-to-end works)
 
-### 14. File picker UI
+### 15. File picker UI
 - Currently Ctrl+O just cycles documents — add a simple list selector rendered on the e-ink display
 
-### 15. Low battery warning banner
+### 16. Low battery warning banner
 - Add overlay rendering in `renderer.py` when `power.is_low` is True
 - Show at <20% in distraction-free and typewriter modes (dashboard always shows battery)
 
-### 16. Stress-test battery life
+### 17. Stress-test battery life
 - Time a full writing session on PiSugar 3 (expect 4-5 hours)
 - Tweak `display_sleep_minutes` for optimal balance
 
-### 17. Enable autostart
+### 18. Enable autostart
+Autostart is already configured by `setup.sh`. To verify or re-enable:
 ```bash
 sudo systemctl enable writer-deck.service
 sudo systemctl start writer-deck.service
