@@ -99,6 +99,10 @@ class TestCreateDriver:
         assert isinstance(drv, NullDriver)
 
     def test_epaper_unavailable_falls_back(self):
-        # On non-Pi hardware, EPaperDriver import fails, falls back to NullDriver
-        drv = create_driver(use_null=False)
+        # create_driver catches any init failure and falls back to NullDriver.
+        # We simulate hardware unavailability by making EPaperDriver.init raise.
+        from unittest.mock import patch
+        from writerdeck.display.driver import EPaperDriver
+        with patch.object(EPaperDriver, "init", side_effect=RuntimeError("no hardware")):
+            drv = create_driver(use_null=False)
         assert isinstance(drv, NullDriver)

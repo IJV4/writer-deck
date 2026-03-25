@@ -251,7 +251,7 @@ class EPD:
         else:
             logger.warning("Wrong image dimensions: must be " + str(self.width) + "x" + str(self.height))
             # return a blank buffer
-            return [0x00] * (int(self.width/8) * self.height)
+            return bytes(int(self.width / 8) * self.height)
 
         # The bytes need to be inverted, because in the PIL world 0=black and 1=white, but
         # in the e-paper world 0=white and 1=black.

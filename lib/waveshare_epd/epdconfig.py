@@ -87,13 +87,13 @@ class RaspberryPi:
         if pin == self.BUSY_PIN:
             return self.GPIO_BUSY_PIN.value
         elif pin == self.RST_PIN:
-            return self.RST_PIN.value
+            return self.GPIO_RST_PIN.value
         elif pin == self.DC_PIN:
-            return self.DC_PIN.value
+            return self.GPIO_DC_PIN.value
         # elif pin == self.CS_PIN:
-        #     return self.CS_PIN.value
+        #     return self.GPIO_CS_PIN.value
         elif pin == self.PWR_PIN:
-            return self.PWR_PIN.value
+            return self.GPIO_PWR_PIN.value
 
     def delay_ms(self, delaytime):
         time.sleep(delaytime / 1000.0)
@@ -196,7 +196,7 @@ class JetsonNano:
         self.GPIO.output(pin, value)
 
     def digital_read(self, pin):
-        return self.GPIO.input(self.BUSY_PIN)
+        return self.GPIO.input(pin)
 
     def delay_ms(self, delaytime):
         time.sleep(delaytime / 1000.0)
@@ -298,16 +298,11 @@ class SunriseX3:
         self.GPIO.output(self.DC_PIN, 0)
         self.GPIO.output(self.PWR_PIN, 0)
 
-        self.GPIO.cleanup([self.RST_PIN, self.DC_PIN, self.CS_PIN, self.BUSY_PIN], self.PWR_PIN)
+        self.GPIO.cleanup([self.RST_PIN, self.DC_PIN, self.CS_PIN, self.BUSY_PIN, self.PWR_PIN])
 
 
-if sys.version_info[0] == 2:
-    process = subprocess.Popen("cat /proc/cpuinfo | grep Raspberry", shell=True, stdout=subprocess.PIPE)
-else:
-    process = subprocess.Popen("cat /proc/cpuinfo | grep Raspberry", shell=True, stdout=subprocess.PIPE, text=True)
+process = subprocess.Popen("cat /proc/cpuinfo | grep Raspberry", shell=True, stdout=subprocess.PIPE, text=True)
 output, _ = process.communicate()
-if sys.version_info[0] == 2:
-    output = output.decode(sys.stdout.encoding)
 
 if "Raspberry" in output:
     implementation = RaspberryPi()
