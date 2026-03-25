@@ -360,7 +360,7 @@ class App:
         self._last_keypress = time.monotonic()
         if self._display_sleeping:
             self._display_sleeping = False
-            self._driver.init()
+            self._driver.wake()
             self._refresh.request_full()
             logger.info("Display woken from sleep")
         # Reverse sleep tiers

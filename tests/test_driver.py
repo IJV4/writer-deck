@@ -1,12 +1,178 @@
-"""Tests for NullDriver."""
+"""Tests for NullDriver and EPaperDriver."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from PIL import Image
 
-from writerdeck.display.driver import NullDriver, create_driver, WIDTH, HEIGHT
+from writerdeck.display.driver import EPaperDriver, NullDriver, create_driver, WIDTH, HEIGHT
+
+# ---------------------------------------------------------------------------
+# EPaperDriver bounding-box partial refresh
+# ---------------------------------------------------------------------------
+
+_ROW = WIDTH // 8       # 100 bytes per row
+_BUF_SIZE = _ROW * HEIGHT  # 48 000 bytes
+
+
+def _white_buf() -> bytes:
+    """E-paper buffer for all-white screen (all zeros = e-paper white)."""
+    return bytes(_BUF_SIZE)
+
+
+def _image_with_black_rows(rows: list[int]) -> Image.Image:
+    """800×480 white image with the given row indices set to black."""
+    img = Image.new("1", (WIDTH, HEIGHT), 255)
+    black_row = Image.new("1", (WIDTH, 1), 0)
+    for y in rows:
+        img.paste(black_row, (0, y))
+    return img
+
+
+def _make_epd_driver(
+    last_buf: bytes | None = _white_buf(),
+    mode: str = "full",
+) -> tuple[EPaperDriver, MagicMock]:
+    """EPaperDriver with a mock _epd. getbuffer inverts PIL bytes (matches real driver)."""
+    mock_epd = MagicMock()
+    mock_epd.getbuffer.side_effect = lambda img: bytes(
+        b ^ 0xFF for b in img.convert("1").tobytes("raw")
+    )
+    drv = EPaperDriver()
+    drv._epd = mock_epd
+    drv._mode = mode
+    drv._last_buf = last_buf
+    return drv, mock_epd
+
+
+class TestEPaperDriverBoundingBoxPartial:
+    def test_calls_display_partial_with_correct_y_bounds(self):
+        drv, mock_epd = _make_epd_driver()
+        drv.display_partial(_image_with_black_rows([10]))
+        mock_epd.display_Partial.assert_called_once()
+        _, xstart, ystart, xend, yend = mock_epd.display_Partial.call_args.args
+        assert ystart == 10
+        assert yend == 11
+
+    def test_partial_buffer_size_matches_changed_rows(self):
+        drv, mock_epd = _make_epd_driver()
+        drv.display_partial(_image_with_black_rows([5, 6, 7]))
+        buf = mock_epd.display_Partial.call_args.args[0]
+        assert len(buf) == 3 * _ROW
+
+    def test_partial_buffer_is_inverted_for_cdi_polarity(self):
+        # display_Partial uses CDI=0xA9 which inverts pixel polarity vs full mode.
+        # EPaperDriver must pre-invert so the wire bytes are opposite to getbuffer output.
+        drv, mock_epd = _make_epd_driver()
+        # Black row: getbuffer → 0xFF bytes; after inversion sent to display_Partial → 0x00
+        drv.display_partial(_image_with_black_rows([10]))
+        sent = mock_epd.display_Partial.call_args.args[0]
+        assert all(b == 0x00 for b in sent)  # 0xFF inverted = 0x00
+
+    def test_xstart_is_zero_and_xend_is_full_width(self):
+        drv, mock_epd = _make_epd_driver()
+        drv.display_partial(_image_with_black_rows([10]))
+        _, xstart, _, xend, _ = mock_epd.display_Partial.call_args.args
+        assert xstart == 0
+        assert xend == WIDTH
+
+    def test_no_change_skips_display(self):
+        drv, mock_epd = _make_epd_driver()
+        # White image matches _white_buf — nothing changed.
+        drv.display_partial(Image.new("1", (WIDTH, HEIGHT), 255))
+        mock_epd.display_Partial.assert_not_called()
+        mock_epd.display.assert_not_called()
+
+    def test_no_last_buf_falls_back_to_fast_full_refresh(self):
+        drv, mock_epd = _make_epd_driver(last_buf=None, mode=None)
+        drv.display_partial(Image.new("1", (WIDTH, HEIGHT), 255))
+        mock_epd.init_fast.assert_called_once()
+        mock_epd.display.assert_called_once()
+        mock_epd.display_Partial.assert_not_called()
+
+    def test_consecutive_partials_init_part_only_once(self):
+        drv, mock_epd = _make_epd_driver()
+        drv.display_partial(_image_with_black_rows([10]))
+        drv.display_partial(_image_with_black_rows([20]))
+        mock_epd.init_part.assert_called_once()
+
+    def test_last_buf_updated_with_new_rows_after_partial(self):
+        drv, mock_epd = _make_epd_driver()
+        drv.display_partial(_image_with_black_rows([15]))
+        # Row 15 should now be 0xFF (black in e-paper format).
+        row_start = 15 * _ROW
+        assert all(b == 0xFF for b in drv._last_buf[row_start : row_start + _ROW])
+        # All other rows still white (zeros).
+        assert drv._last_buf[:row_start] == bytes(row_start)
+        assert drv._last_buf[row_start + _ROW :] == bytes(_BUF_SIZE - row_start - _ROW)
+
+    def test_large_change_escalates_to_fast_full(self):
+        # Change > 30% of rows → init_fast + display, not display_Partial.
+        drv, mock_epd = _make_epd_driver()
+        # Make > 30% of rows (>144) black in a white-screen reference.
+        rows = list(range(0, 200))  # 200/480 ≈ 42% — above threshold
+        drv.display_partial(_image_with_black_rows(rows))
+        mock_epd.init_fast.assert_called_once()
+        mock_epd.display.assert_called_once()
+        mock_epd.display_Partial.assert_not_called()
+
+    def test_small_change_uses_bounding_box_partial(self):
+        # Change < 30% of rows → init_part + display_Partial.
+        drv, mock_epd = _make_epd_driver()
+        drv.display_partial(_image_with_black_rows([10, 11, 12]))  # 3/480 ≈ 0.6%
+        mock_epd.init_part.assert_called_once()
+        mock_epd.display_Partial.assert_called_once()
+        mock_epd.display.assert_not_called()
+
+    def test_escalation_updates_last_buf(self):
+        drv, mock_epd = _make_epd_driver()
+        rows = list(range(0, 200))
+        img = _image_with_black_rows(rows)
+        drv.display_partial(img)
+        # _last_buf should reflect the new image after escalated full refresh.
+        assert drv._last_buf is not None
+        assert len(drv._last_buf) == _BUF_SIZE
+
+    def test_display_full_stores_last_buf(self):
+        drv, mock_epd = _make_epd_driver(last_buf=None)
+        img = Image.new("1", (WIDTH, HEIGHT), 0)  # all black
+        # getbuffer returns all 0xFF for black image
+        mock_epd.getbuffer.side_effect = lambda i: bytes(
+            b ^ 0xFF for b in i.convert("1").tobytes("raw")
+        )
+        drv.display_full(img)
+        assert drv._last_buf is not None
+        assert len(drv._last_buf) == _BUF_SIZE
+
+    def test_sleep_preserves_last_buf(self):
+        # E-ink retains its image without power — _last_buf stays valid through sleep.
+        last = _white_buf()
+        drv, mock_epd = _make_epd_driver(last_buf=last)
+        drv.sleep()
+        assert drv._last_buf is last
+
+    def test_wake_does_not_call_clear(self):
+        drv, mock_epd = _make_epd_driver(mode=None)
+        drv.wake()
+        mock_epd.Clear.assert_not_called()
+
+    def test_wake_calls_epd_init(self):
+        drv, mock_epd = _make_epd_driver(mode=None)
+        drv.wake()
+        mock_epd.init.assert_called_once()
+
+    def test_wake_sets_mode_to_full(self):
+        drv, mock_epd = _make_epd_driver(mode=None)
+        drv.wake()
+        assert drv._mode == "full"
+
+    def test_wake_preserves_last_buf(self):
+        last = _white_buf()
+        drv, mock_epd = _make_epd_driver(last_buf=last, mode=None)
+        drv.wake()
+        assert drv._last_buf is last
 
 
 def _make_image() -> Image.Image:
@@ -74,6 +240,14 @@ class TestNullDriverSleep:
         drv.init()
         drv.sleep()
         assert drv._sleeping is True
+
+    def test_wake_clears_sleeping_flag(self, tmp_path):
+        drv = NullDriver(output_dir=str(tmp_path))
+        drv.init()
+        drv.sleep()
+        assert drv._sleeping is True
+        drv.wake()
+        assert drv._sleeping is False
 
     def test_close_calls_sleep(self, tmp_path):
         drv = NullDriver(output_dir=str(tmp_path))

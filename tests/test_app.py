@@ -327,7 +327,7 @@ class TestOnAnyKey:
         app._display_sleeping = True
         app._on_any_key()
         assert app._display_sleeping is False
-        app._driver.init.assert_called()
+        app._driver.wake.assert_called()
 
     def test_reverses_tier2(self, tmp_path):
         app = self._make_app(tmp_path)
