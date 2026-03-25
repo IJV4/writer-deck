@@ -240,6 +240,8 @@ render_interval_ms: 500             # Display update frequency (ms)
 partial_refresh_max_streak: 20      # Partial refreshes before a full one
 idle_full_refresh_seconds: 10       # Full refresh after N seconds idle
 show_title_bar: true                # Show doc name at top
+use_4gray: false                    # 4-gray grayscale (recommended for screens bought after Oct 2023)
+idle_deep_clean_seconds: 300        # GC16 ghost-clear after N idle seconds (0 = disabled)
 
 # Writing
 daily_goal_words: 500               # Daily word count target
@@ -307,7 +309,7 @@ The one-shot setup script handles:
 3. Bluetooth disabled, HDMI disabled (power savings)
 4. lgpio compiled and installed (Bookworm requirement)
 5. PiSugar daemon installed
-6. Waveshare e-Paper driver cloned to `lib/waveshare_epd/`
+6. Waveshare e-Paper driver vendored to `lib/waveshare_epd/`
 7. Python venv created with dependencies (evdev, spidev, gpiozero, lgpio)
 8. Data directories created
 9. Systemd service generated and enabled with the correct user and paths
@@ -334,6 +336,8 @@ The service includes a 120-second watchdog. If the app hangs, systemd restarts i
 | EPaperDriver | On Raspberry Pi | Real e-ink display |
 | NullDriver | Non-Pi, default | PNGs saved to `/tmp/writer-deck/` |
 | PygameDriver | `keyboard_input: pygame` | Live 800x480 SDL window |
+
+`EPaperDriver` uses four waveform modes: bounding-box partial (~0.3s), fast-full (~1s), 4-gray grayscale (~1.5s), and GC16 deep clean (~3-4s). The app selects the right one automatically based on how much changed and how long the user has been idle.
 
 ### Input Backends
 
@@ -413,7 +417,7 @@ Avoid using `/dev/input/event*` paths directly — device numbers can shift afte
 If you see `EPaperDriver unavailable, falling back to NullDriver`, check:
 
 1. SPI is enabled — `ls /dev/spidev*` should show `spidev0.0` and `spidev0.1`. If not, reboot (SPI requires a reboot after `setup.sh`).
-2. Waveshare driver is present — `ls ~/writer-deck/lib/waveshare_epd/epd7in5_V2.py`
+2. Waveshare driver is present — `ls ~/writer-deck/lib/waveshare_epd/epd7in5_V2.py`. If missing, run `setup.sh` again.
 3. Pi-only Python deps are installed — `~/writer-deck/venv/bin/pip show spidev gpiozero lgpio`
 
 ### Service keeps restarting

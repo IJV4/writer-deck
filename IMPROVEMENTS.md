@@ -1,6 +1,52 @@
-# Writer Deck — Developer Tooling Improvements
+# Writer Deck — Improvements
 
-All 5 improvements have been implemented.
+---
+
+## Display Refresh Overhaul — DONE
+
+All 5 refresh improvements have been implemented and tested on Pi Zero 2 W hardware.
+
+### 1. True Bounding-Box Partial Refresh — DONE
+
+**What:** Per-keystroke updates now refresh only the changed rows on the display instead of doing a full-panel refresh.
+
+**How it works:** `EPaperDriver.display_partial()` diffs the new buffer against `_last_buf` row-by-row. It finds the bounding box (`y_start`..`y_end`) of changed rows, extracts that slice, and calls `display_Partial(slice, 0, y_start, 800, y_end)`. The slice is pre-inverted (`b ^ 0xFF`) to compensate for the CDI polarity flip in the `display_Partial` waveform.
+
+**Result:** ~0.3s keystroke latency vs ~1s previously. Only the changed region blinks.
+
+### 2. Wake Without Clear — DONE
+
+**What:** When the display wakes from sleep, it no longer flashes white before restoring the screen.
+
+**How it works:** Added `EPaperDriver.wake()` which calls `epd.init()` without `epd.Clear()`. E-ink panels retain their image without power, so `_last_buf` stays valid and bounding-box partials resume immediately after wake.
+
+### 3. Diff-Based Refresh Mode Selection — DONE
+
+**What:** Large changes (paste, scroll, mode switch) automatically escalate from partial to fast-full.
+
+**How it works:** `display_partial()` counts changed rows during the diff pass. If `changed_rows / HEIGHT > 0.3`, it escalates to `init_fast + display()` instead of bounding-box partial. This threshold avoids partial refreshes that would look worse or take longer than a clean fast-full.
+
+### 4. 4-Gray Grayscale Rendering — DONE
+
+**What:** Anti-aliased text using 4-gray (2-bit) e-ink mode. Text edges look smooth instead of jagged.
+
+**How it works:** When `use_4gray: true`, full refreshes call `display_full_4gray()` with a PIL `"L"` mode image. The renderer produces `"L"` mode when called with `grayscale=True`. After a 4-gray refresh, `_last_buf` is cleared (`None`) so the next partial falls back to fast-full to reload 1-bit controller RAM before bounding-box partials resume.
+
+**Enable:** Add `use_4gray: true` to `config.yaml`. Recommended for displays purchased after Oct 2023.
+
+### 5. GC16 Deep Clean Moved to Idle — DONE
+
+**What:** The slow GC16 full-clean waveform (~3-4s, 8 blink cycles) no longer runs during active typing. Regular full refreshes use `init_fast` (~1s, 2-3 blinks) instead.
+
+**How it works:** `display_clean()` uses `init()` (GC16) for thorough ghost-clearing, but `App._render_and_refresh()` only calls it after `idle_deep_clean_seconds` of inactivity (default 300s). Regular full refreshes use `display_full()` which uses `init_fast`. The result is dramatically less blinking during a writing session.
+
+**Config:** `idle_deep_clean_seconds: 300` in `config.yaml`. Set to `0` to disable.
+
+---
+
+## Developer Tooling — DONE
+
+All 5 developer tooling improvements have been implemented.
 
 ---
 

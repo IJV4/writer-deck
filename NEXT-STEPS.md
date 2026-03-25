@@ -1,155 +1,73 @@
 # Writer Deck — Next Steps
 
-## Immediate: Get running on WSL (Ubuntu)
+## Status
 
-### 1. Clone/copy the project
-```bash
-# If using git:
-git clone <your-repo-url> ~/projects/writer-deck
-cd ~/projects/writer-deck
-
-# Or just copy the folder from the Mac
-```
-
-### 2. Install dependencies
-```bash
-chmod +x setup-dev.sh
-./setup-dev.sh
-source venv/bin/activate
-```
-
-### 3. Run tests
-```bash
-python -m pytest tests/ -v
-```
-
-### 4. Verify NullDriver rendering
-```bash
-python main.py
-# Press Ctrl+C after a moment — check /tmp/writer-deck/ for PNG frames
-# (keyboard input won't work without evdev, but initial render should save)
-```
-
-### 5. Bundle a font
-```bash
-# Download Hack or JetBrains Mono .ttf into assets/fonts/
-wget -O assets/fonts/Hack-Regular.ttf \
-  https://github.com/source-foundry/Hack/releases/download/v3.003/Hack-v3.003-ttf.zip
-# (or just: sudo apt install fonts-hack-ttf — already in step 2)
-```
+Hardware is fully operational on Pi Zero 2 W:
+- E-ink display working with bounding-box partial refresh, 4-gray grayscale, and optimized waveform selection
+- USB keyboard reading via evdev
+- Systemd service autostarts on boot
+- Display sleep/wake without white flash
 
 ---
 
-## On the Pi Zero 2 W
+## Remaining Work
 
-### 6. Set up SSH key and transfer files
-```bash
-# Generate a key if you don't have one yet
-ssh-keygen -t ed25519 -C "writerdeck-dev" -f ~/.ssh/id_ed25519
+### UI Improvements
 
-# Copy it to the Pi (enter Pi password once)
-ssh-copy-id pi@<PI_IP>
+The visual design of the writer interface could be improved:
 
-# Transfer project files (skips venv, tests, dev files)
-bash deploy.sh <PI_IP> pi
-```
+- **Margins and layout** — adjust text area padding, line height, and margins for a more comfortable reading/writing experience
+- **Cursor visibility** — current cursor indicator could be more prominent on the e-ink display
+- **Title bar** — consider a more subtle separator between title and content area
+- **Dashboard sidebar** — review stat labels and spacing for clarity
 
-### 7. Run setup.sh
-```bash
-chmod +x setup.sh
-./setup.sh
-# This handles: system packages, SPI/I2C, lgpio, Waveshare driver clone,
-# venv, pisugar daemon, systemd service, user groups
-# Reboot after for SPI/I2C/BT changes to take effect
-```
+### Keyboard Usability (60% keyboard)
 
-### 8. First hardware test
-```bash
-# Find your keyboard device (evtest is installed by setup.sh):
-evtest
-# Look for your keyboard name — avoid entries ending in "System Control"
-# or "Consumer Control", those are auxiliary interfaces.
+The device uses a 60% keyboard (no function row, no dedicated navigation keys). Improve the mapping for missing keys:
 
-# Get the stable by-id path (won't change across reboots):
-ls /dev/input/by-id/
-# Use the symlink ending in "event-kbd"
+- **Page Up / Page Down** — currently mapped, but verify the 60% layout sends the right codes
+- **Home / End** — verify these are accessible without a function layer
+- **Function key alternatives** — consider Fn+layer combos for missing keys
+- Review `writerdeck/input/keymapper.py` for any gaps in the current keymap
 
-# Write config.yaml:
-cat > ~/writer-deck/config.yaml <<EOF
-keyboard_input: evdev
-keyboard_device: /dev/input/by-id/usb-YOUR_KEYBOARD-event-kbd
-EOF
+### File Management Improvements
 
-# Restart the service to pick up config:
-sudo systemctl restart writer-deck
-# Text should appear on the e-ink display and keys should register
-```
-
-### 9. Tune refresh behavior
-Edit `config.yaml`:
-```yaml
-partial_refresh_max_streak: 20   # lower = more full refreshes (cleaner but slower)
-render_interval_ms: 500          # how often the display updates
-font_size: 14                    # smaller = more text visible, slower to render
-display_sleep_minutes: 5         # 0 to disable idle sleep
-```
+- **Document naming** — the `untitled-N.txt` scheme is functional but not descriptive; consider prompting for a name on first save, or auto-titling from the first line of content
+- **File picker** — currently lists files by modification time; consider showing file size or word count in the picker
+- **Export/backup** — USB export works; consider adding a timestamp or organizing exports into dated folders
 
 ---
 
-## Hardware Assembly
+## Hardware Assembly (if not done)
 
-### 10. Connect PiSugar 3
-- Attach PiSugar 3 to the back of Pi Zero via POGO pins (no GPIO conflict with e-ink HAT)
-- Install daemon (setup.sh does this)
-- Test: `python -c "from writerdeck.utils.power import Power; p = Power(); p._update(); print(p.battery_level)"`
+### 3D Case
 
-### 11. Apply power optimizations
-Already in setup.sh, but verify:
-- HDMI disabled: `tvservice -o` in `/etc/rc.local`
-- Bluetooth disabled: `dtoverlay=disable-bt` in `/boot/config.txt`
-- CPU governor: `echo powersave | sudo tee /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor`
-
----
-
-## 3D Case
-
-### 12. Measure your assembled stack
-- [ ] Waveshare 7.5" HAT PCB exact dimensions (expect ~170mm × 111mm)
-- [ ] Pi Zero + PiSugar stacked height
+- [ ] Measure assembled stack: Waveshare HAT PCB (~170mm × 111mm), Pi Zero + PiSugar stacked height
 - [ ] SPI ribbon/connector clearance
 - [ ] USB connector type on your keyboard (for port cutout)
+- [ ] Design two-part friction-fit or M2.5 screwed enclosure (FreeCAD or Fusion 360)
+  - Front: display window cutout (163mm × 98mm + 0.2mm tolerance)
+  - Back: component compartments, port cutouts (USB-C charge, USB keyboard, micro-SD)
+  - Material: PETG, 2-3mm walls, ~175mm × 115mm × 20-25mm total
 
-### 13. Design enclosure
-- Tool: FreeCAD or Fusion 360
-- Two-part friction-fit or M2.5 screwed enclosure
-- Front shell: display window cutout (163mm × 98mm + 0.2mm tolerance)
-- Back shell: component compartments, port cutouts (USB-C charge, USB keyboard, micro-SD)
-- Material: PETG, 2-3mm walls
-- Total footprint estimate: ~175mm × 115mm × 20-25mm
+### Battery Life Testing
 
-### 14. Order print
-- Upload STL to JLC3DP, Craftcloud, or Treatstock
-- Add 0.2mm clearance on component seats, 0.3mm on port cutouts
-
----
-
-## Polish (after end-to-end works)
-
-### 15. File picker UI
-- Currently Ctrl+O just cycles documents — add a simple list selector rendered on the e-ink display
-
-### 16. Low battery warning banner
-- Add overlay rendering in `renderer.py` when `power.is_low` is True
-- Show at <20% in distraction-free and typewriter modes (dashboard always shows battery)
-
-### 17. Stress-test battery life
 - Time a full writing session on PiSugar 3 (expect 4-5 hours)
 - Tweak `display_sleep_minutes` for optimal balance
 
-### 18. Enable autostart
-Autostart is already configured by `setup.sh`. To verify or re-enable:
+---
+
+## Dev Setup Reference
+
+If setting up a new dev machine:
+
 ```bash
-sudo systemctl enable writer-deck.service
-sudo systemctl start writer-deck.service
-# Pi boots directly into Writer Deck — no desktop, no distractions
+# WSL/Ubuntu
+chmod +x setup-dev.sh
+./setup-dev.sh
+source venv/bin/activate
+python main.py
+
+# Deploy to Pi
+./deploy.sh 192.168.1.21      # or your Pi's IP
 ```

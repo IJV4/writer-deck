@@ -54,15 +54,50 @@ python main.py
 
 ```
 Mode.render(doc, session) → RenderFrame
-    → writerdeck/display/renderer.py::render() → PIL Image (800×480, 1-bit)
+    → writerdeck/display/renderer.py::render() → PIL Image (800×480, 1-bit or "L")
     → RefreshManager decides full vs partial
-    → DisplayDriver.display_full() or display_partial()
+    → App._render_and_refresh() selects the right DisplayDriver method
+    → EPaperDriver / NullDriver / PygameDriver
 ```
 
 `DisplayDriver` is a structural `Protocol` (`writerdeck/display/driver.py`). Three implementations:
 - `EPaperDriver` — real Waveshare hardware (Pi only, requires `waveshare_epd` in `lib/`)
 - `NullDriver` — saves PNG frames to `/tmp/writer-deck/` (dev/desktop)
 - `PygameDriver` — renders to a pygame window (set `keyboard_input: pygame`)
+
+#### Display methods and waveform modes
+
+`EPaperDriver` exposes four display methods, each using a different e-ink waveform:
+
+| Method | Waveform | Speed | Use |
+|--------|----------|-------|-----|
+| `display_partial(img)` | init_part (CDI 0xA9) | ~0.3s, minimal blink | Per-keystroke updates (bounding-box diff) |
+| `display_full(img)` | init_fast | ~1s, 2-3 blinks | Regular streak/idle full refreshes |
+| `display_full_4gray(img)` | init_4Gray | ~1.5s | Anti-aliased grayscale rendering |
+| `display_clean(img)` | init (GC16) | ~3-4s, 8 blinks | Deep ghost-clearing after long idle |
+
+`EPaperDriver` tracks waveform state in `_mode` (`"full"` / `"fast"` / `"part"` / `"4gray"` / `None`) to skip redundant ~100ms re-inits when consecutive calls use the same waveform.
+
+#### Bounding-box partial refresh
+
+`display_partial()` does a row-level diff between the new buffer and `_last_buf`:
+1. Single scan finds the bounding box (`y_start`..`y_end`) and counts changed rows.
+2. If `changed_rows / HEIGHT > 0.3` (escalation threshold), falls back to `init_fast + display()`.
+3. Otherwise calls `init_part + display_Partial(slice, 0, y_start, WIDTH, y_end)`.
+4. The slice is pre-inverted (`b ^ 0xFF`) because `display_Partial` uses CDI register `0xA9` which flips pixel polarity vs CDI `0x10` used in full/fast modes.
+5. `_last_buf` is updated with the changed rows after each partial, or replaced in full after escalation.
+
+`_last_buf` is preserved through `sleep()` — e-ink retains its image without power, so the diff remains valid after wake.
+
+`wake()` calls `epd.init()` without `epd.Clear()` (no white flash). This is distinct from `init()` which calls `Clear()` on first boot.
+
+#### 4-gray mode
+
+When `use_4gray: true`, full refreshes call `display_full_4gray()` with a PIL `"L"` mode image (renderer renders with `grayscale=True`). After a 4-gray refresh, `_last_buf` is set to `None` because controller RAM is in 4-gray format — the next `display_partial()` falls back to fast-full to reload 1-bit DTM buffers before bounding-box partials can resume.
+
+#### Deep clean (GC16)
+
+`display_clean()` uses `init()` (GC16 waveform) for thorough ghost-clearing. `App._render_and_refresh()` calls it only when `idle_secs >= idle_deep_clean_seconds` (default 300s). Regular full refreshes use the faster `init_fast` waveform via `display_full()`.
 
 `RefreshManager` (`writerdeck/display/refresh_manager.py`) tracks a partial-refresh streak and forces a full refresh after `partial_refresh_max_streak` partials or after `idle_full_refresh_seconds` of no input.
 
@@ -107,7 +142,7 @@ Three idle sleep tiers (configurable in `sleep_tiers`): display off → CPU powe
 
 ## Key Constraints
 
-- Display is always 800×480, 1-bit (black/white only). All rendering uses PIL with no greyscale.
-- The Waveshare 7.5" V2 stock Python driver does not support true partial refresh — `display_partial` calls `display()` (full refresh) under the hood.
-- `waveshare_epd` is not a pip package; it lives in `lib/waveshare_epd/` (copied by `setup.sh` from the Waveshare GitHub repo). `mypy` and coverage are configured to ignore this path.
+- Display is always 800×480. Default rendering is 1-bit (black/white). Pass `grayscale=True` to `renderer.render()` to get a PIL `"L"` mode image for 4-gray mode.
+- The Waveshare 7.5" V2 stock Python driver's `display_Partial` sets CDI register `0xA9`, which inverts pixel polarity vs full/fast modes. The slice passed to it must be pre-inverted (`b ^ 0xFF`).
+- `waveshare_epd` is not a pip package; it lives in `lib/waveshare_epd/` (vendored — `setup.sh` copies it from the Waveshare GitHub repo). `mypy` and coverage are configured to ignore this path.
 - Tests run on desktop without any Pi hardware; hardware-dependent code must be guarded by `is_pi` checks or caught exceptions.
