@@ -56,16 +56,14 @@ fi
 echo "[6/10] Adding user to hardware groups..."
 sudo usermod -aG input,spi,gpio,i2c "$USER" 2>/dev/null || true
 
-# 7. Clone Waveshare e-Paper library
-echo "[7/10] Setting up Waveshare e-Paper driver..."
+# 7. Waveshare e-Paper driver (vendored in lib/waveshare_epd/ — no download needed)
+echo "[7/10] Verifying Waveshare e-Paper driver..."
 LIB_DIR="$SCRIPT_DIR/lib/waveshare_epd"
 if [ ! -f "$LIB_DIR/epd7in5_V2.py" ]; then
-    TMP_EPAPER="/tmp/e-Paper"
-    rm -rf "$TMP_EPAPER"
-    git clone --depth 1 https://github.com/waveshare/e-Paper.git "$TMP_EPAPER"
-    mkdir -p "$LIB_DIR"
-    cp "$TMP_EPAPER/RaspberryPi_JetsonNano/python/lib/waveshare_epd/"*.py "$LIB_DIR/"
-    rm -rf "$TMP_EPAPER"
+    echo "  ERROR: $LIB_DIR/epd7in5_V2.py not found."
+    echo "  The Waveshare driver should be bundled in the project under lib/waveshare_epd/."
+    echo "  Make sure you deployed the full project before running setup.sh."
+    exit 1
 fi
 
 # 8. Python venv + dependencies

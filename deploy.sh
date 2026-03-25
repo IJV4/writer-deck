@@ -15,7 +15,6 @@ rsync -avz --delete \
     --exclude '*.Zone.Identifier' \
     --exclude '.venv' \
     --exclude 'venv' \
-    --exclude 'lib/waveshare_epd' \
     --exclude 'htmlcov' \
     --exclude '.coverage' \
     --exclude '.pytest_cache' \

@@ -27,28 +27,37 @@ class EPaperDriver:
 
     def __init__(self) -> None:
         self._epd = None
+        self._mode: str | None = None  # 'full' | 'fast' | None (after sleep)
 
     def init(self) -> None:
         from waveshare_epd import epd7in5_V2  # type: ignore[import-untyped]
         self._epd = epd7in5_V2.EPD()
         self._epd.init()
         self._epd.Clear()
+        self._mode = "full"
         logger.info("EPaperDriver initialized (%dx%d)", WIDTH, HEIGHT)
 
     def display_full(self, image: Image.Image) -> None:
         assert self._epd is not None
+        if self._mode != "full":
+            self._epd.init()
+            self._mode = "full"
         self._epd.display(self._epd.getbuffer(image))
 
     def display_partial(self, image: Image.Image) -> None:
         assert self._epd is not None
-        # Waveshare 7.5" V2 doesn't natively support partial refresh through
-        # the stock Python driver — we do a full refresh but can keep the call
-        # signature consistent for future hardware that supports it.
+        # init_fast() uses a faster waveform (~1s vs ~3-4s for GC16).
+        # Only re-init when switching modes — avoids ~100ms overhead on
+        # consecutive fast refreshes (i.e. every keystroke while typing).
+        if self._mode != "fast":
+            self._epd.init_fast()
+            self._mode = "fast"
         self._epd.display(self._epd.getbuffer(image))
 
     def sleep(self) -> None:
         if self._epd is not None:
             self._epd.sleep()
+            self._mode = None  # hardware power cut — must re-init before next display
             logger.info("EPaperDriver sleeping")
 
     def close(self) -> None:
