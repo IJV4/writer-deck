@@ -349,15 +349,25 @@ class App:
 
         will_full = self._refresh.should_full_refresh()
 
-        if will_full and self._config.use_4gray:
-            image = render(frame, self._config.font_family, self._config.font_size, grayscale=True)
-            self._driver.display_full_4gray(image)
+        if will_full:
+            idle_secs = time.monotonic() - self._last_keypress
+            deep_clean_threshold = self._config.idle_deep_clean_seconds
+            is_deep_clean = deep_clean_threshold > 0 and idle_secs >= deep_clean_threshold
+
+            if is_deep_clean:
+                # User has been away long enough — do a GC16 clean to wipe
+                # any accumulated ghosting. Uses init() waveform, not init_fast().
+                image = render(frame, self._config.font_family, self._config.font_size)
+                self._driver.display_clean(image)
+            elif self._config.use_4gray:
+                image = render(frame, self._config.font_family, self._config.font_size, grayscale=True)
+                self._driver.display_full_4gray(image)
+            else:
+                image = render(frame, self._config.font_family, self._config.font_size)
+                self._driver.display_full(image)
         else:
             image = render(frame, self._config.font_family, self._config.font_size)
-            if will_full:
-                self._driver.display_full(image)
-            else:
-                self._driver.display_partial(image)
+            self._driver.display_partial(image)
 
         self._refresh.record_refresh(was_full=will_full)
 

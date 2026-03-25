@@ -22,6 +22,7 @@ log_dir: ~/.config/writer-deck/logs
 show_title_bar: true
 default_format: txt
 use_4gray: false  # set true on screens purchased after Oct 2023 for anti-aliased text
+idle_deep_clean_seconds: 300  # GC16 clean after this many idle seconds (0 = disabled)
 sleep_tiers:
   display_off_minutes: 5
   cpu_powersave_minutes: 15

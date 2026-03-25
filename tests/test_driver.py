@@ -135,14 +135,40 @@ class TestEPaperDriverBoundingBoxPartial:
         assert drv._last_buf is not None
         assert len(drv._last_buf) == _BUF_SIZE
 
+    def test_display_full_uses_fast_waveform_not_gc16(self):
+        # display_full() should use init_fast(), not init() — fewer blink cycles.
+        drv, mock_epd = _make_epd_driver(mode=None)
+        drv.display_full(Image.new("1", (WIDTH, HEIGHT), 255))
+        mock_epd.init_fast.assert_called_once()
+        mock_epd.init.assert_not_called()
+
+    def test_display_full_no_reinit_when_already_fast(self):
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        drv.display_full(Image.new("1", (WIDTH, HEIGHT), 255))
+        mock_epd.init_fast.assert_not_called()
+
     def test_display_full_stores_last_buf(self):
         drv, mock_epd = _make_epd_driver(last_buf=None)
         img = Image.new("1", (WIDTH, HEIGHT), 0)  # all black
-        # getbuffer returns all 0xFF for black image
-        mock_epd.getbuffer.side_effect = lambda i: bytes(
-            b ^ 0xFF for b in i.convert("1").tobytes("raw")
-        )
         drv.display_full(img)
+        assert drv._last_buf is not None
+        assert len(drv._last_buf) == _BUF_SIZE
+
+    def test_display_clean_always_calls_gc16_init(self):
+        # display_clean() must use init() (GC16) every time, regardless of current mode.
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        drv.display_clean(Image.new("1", (WIDTH, HEIGHT), 255))
+        mock_epd.init.assert_called_once()
+        mock_epd.init_fast.assert_not_called()
+
+    def test_display_clean_sets_mode_to_full(self):
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        drv.display_clean(Image.new("1", (WIDTH, HEIGHT), 255))
+        assert drv._mode == "full"
+
+    def test_display_clean_stores_last_buf(self):
+        drv, mock_epd = _make_epd_driver(last_buf=None)
+        drv.display_clean(Image.new("1", (WIDTH, HEIGHT), 255))
         assert drv._last_buf is not None
         assert len(drv._last_buf) == _BUF_SIZE
 

@@ -19,6 +19,7 @@ class DisplayDriver(Protocol):
     def wake(self) -> None: ...
     def display_full(self, image: Image.Image) -> None: ...
     def display_full_4gray(self, image: Image.Image) -> None: ...
+    def display_clean(self, image: Image.Image) -> None: ...
     def display_partial(self, image: Image.Image) -> None: ...
     def sleep(self) -> None: ...
     def close(self) -> None: ...
@@ -48,13 +49,27 @@ class EPaperDriver:
         logger.info("EPaperDriver initialized (%dx%d)", WIDTH, HEIGHT)
 
     def display_full(self, image: Image.Image) -> None:
+        """Fast full refresh (~1s, 2-3 blink cycles). Use for streak/idle cleans."""
         assert self._epd is not None
-        if self._mode != "full":
-            self._epd.init()
-            self._mode = "full"
+        if self._mode != "fast":
+            self._epd.init_fast()
+            self._mode = "fast"
         buf = self._epd.getbuffer(image)
         self._epd.display(buf)
         self._last_buf = buf
+
+    def display_clean(self, image: Image.Image) -> None:
+        """GC16 deep clean (~3-4s, many blink cycles). Eliminates accumulated ghosting.
+        Use sparingly — only after extended idle when the user is away from the desk.
+        """
+        assert self._epd is not None
+        # Always re-init with the full GC16 waveform, regardless of current mode.
+        self._epd.init()
+        self._mode = "full"
+        buf = self._epd.getbuffer(image)
+        self._epd.display(buf)
+        self._last_buf = buf
+        logger.info("EPaperDriver GC16 deep clean")
 
     def display_full_4gray(self, image: Image.Image) -> None:
         assert self._epd is not None
@@ -172,6 +187,9 @@ class NullDriver:
 
     def display_full_4gray(self, image: Image.Image) -> None:
         self._save(image, "4gray")
+
+    def display_clean(self, image: Image.Image) -> None:
+        self._save(image, "clean")
 
     def display_partial(self, image: Image.Image) -> None:
         self._save(image, "partial")
