@@ -18,6 +18,7 @@ class DisplayDriver(Protocol):
     def init(self) -> None: ...
     def wake(self) -> None: ...
     def display_full(self, image: Image.Image) -> None: ...
+    def display_full_4gray(self, image: Image.Image) -> None: ...
     def display_partial(self, image: Image.Image) -> None: ...
     def sleep(self) -> None: ...
     def close(self) -> None: ...
@@ -54,6 +55,18 @@ class EPaperDriver:
         buf = self._epd.getbuffer(image)
         self._epd.display(buf)
         self._last_buf = buf
+
+    def display_full_4gray(self, image: Image.Image) -> None:
+        assert self._epd is not None
+        if self._mode != "4gray":
+            self._epd.init_4Gray()
+            self._mode = "4gray"
+        self._epd.display_4Gray(self._epd.getbuffer_4Gray(image))
+        # Controller RAM is now in 4Gray format. The next display_partial() must
+        # fall back to a fast full refresh to reload DTM1/DTM2 in 1-bit format
+        # before bounding-box partials can resume correctly.
+        self._last_buf = None
+        logger.info("EPaperDriver 4Gray full refresh")
 
     def display_partial(self, image: Image.Image) -> None:
         assert self._epd is not None
@@ -156,6 +169,9 @@ class NullDriver:
 
     def display_full(self, image: Image.Image) -> None:
         self._save(image, "full")
+
+    def display_full_4gray(self, image: Image.Image) -> None:
+        self._save(image, "4gray")
 
     def display_partial(self, image: Image.Image) -> None:
         self._save(image, "partial")

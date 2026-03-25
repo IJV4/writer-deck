@@ -21,6 +21,7 @@ pisugar_socket: /tmp/pisugar-server.sock
 log_dir: ~/.config/writer-deck/logs
 show_title_bar: true
 default_format: txt
+use_4gray: false  # set true on screens purchased after Oct 2023 for anti-aliased text
 sleep_tiers:
   display_off_minutes: 5
   cpu_powersave_minutes: 15

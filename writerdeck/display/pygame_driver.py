@@ -34,8 +34,14 @@ class PygameDriver:
     def display_full(self, image: Image.Image) -> None:
         self._blit(image)
 
+    def display_full_4gray(self, image: Image.Image) -> None:
+        self._blit(image)
+
     def display_partial(self, image: Image.Image) -> None:
         self._blit(image)
+
+    def wake(self) -> None:
+        self._sleeping = False
 
     def sleep(self) -> None:
         self._sleeping = True

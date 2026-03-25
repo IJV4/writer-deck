@@ -347,14 +347,19 @@ class App:
         if force_full or frame.force_full_refresh:
             self._refresh.request_full()
 
-        image = render(frame, self._config.font_family, self._config.font_size)
+        will_full = self._refresh.should_full_refresh()
 
-        if self._refresh.should_full_refresh():
-            self._driver.display_full(image)
-            self._refresh.record_refresh(was_full=True)
+        if will_full and self._config.use_4gray:
+            image = render(frame, self._config.font_family, self._config.font_size, grayscale=True)
+            self._driver.display_full_4gray(image)
         else:
-            self._driver.display_partial(image)
-            self._refresh.record_refresh(was_full=False)
+            image = render(frame, self._config.font_family, self._config.font_size)
+            if will_full:
+                self._driver.display_full(image)
+            else:
+                self._driver.display_partial(image)
+
+        self._refresh.record_refresh(was_full=will_full)
 
     def _on_any_key(self) -> None:
         self._last_keypress = time.monotonic()

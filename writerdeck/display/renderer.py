@@ -9,9 +9,22 @@ from writerdeck.display.fonts import get_font
 from writerdeck.modes.base_mode import RenderFrame
 
 
-def render(frame: RenderFrame, font_family: str, font_size: int) -> Image.Image:
-    """Render a RenderFrame to an 800x480 1-bit image."""
-    img = Image.new("1", (WIDTH, HEIGHT), 255)  # white background
+def render(
+    frame: RenderFrame,
+    font_family: str,
+    font_size: int,
+    *,
+    grayscale: bool = False,
+) -> Image.Image:
+    """Render a RenderFrame to an 800x480 image.
+
+    With grayscale=False (default) the image is 1-bit ('1' mode) for standard
+    e-ink refresh. With grayscale=True it is 8-bit greyscale ('L' mode); PIL
+    automatically anti-aliases TrueType glyphs in this mode, producing smooth
+    edges that the 4Gray waveform can render as intermediate grey levels.
+    """
+    mode = "L" if grayscale else "1"
+    img = Image.new(mode, (WIDTH, HEIGHT), 255)  # white background
     draw = ImageDraw.Draw(img)
     font = get_font(font_family, font_size)
 
