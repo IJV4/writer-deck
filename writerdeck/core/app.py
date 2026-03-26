@@ -125,12 +125,14 @@ class App:
         self._power.start(shutdown_callback=self._emergency_shutdown)
         self._session.start(self._doc.word_count)
 
-        # Load last document or create new
-        docs = self._file_mgr.list_documents()
-        if docs:
-            self._file_mgr.load(docs[-1], self._doc)
+        # Load last opened doc, fall back to most recently modified, then create new
+        name_to_load = self._file_mgr.load_last_open() or self._file_mgr.most_recent_document()
+        if name_to_load:
+            self._file_mgr.load(name_to_load, self._doc)
         else:
-            self._doc.load("", self._file_mgr.new_document_name())
+            name = self._file_mgr.new_document_name()
+            self._doc.load("", name)
+            self._file_mgr.save_last_open(name)
 
         self._mode.on_enter()
         self._render_and_refresh(force_full=True)
@@ -218,6 +220,11 @@ class App:
             self._shutdown()
             return False
         if action == KeyAction.SAVE:
+            if not self._file_mgr._doc_path(self._doc.name).exists():
+                from writerdeck.modes.save_name_overlay import SaveNameOverlay
+                self._overlay = SaveNameOverlay(self._doc.name)
+                self._refresh.request_full()
+                return True
             self._file_mgr.save(self._doc)
             self._session.persist(self._doc.word_count)
             self._status.show("Saved")
@@ -232,12 +239,18 @@ class App:
             self._session.persist(self._doc.word_count)
             name = self._file_mgr.new_document_name()
             self._doc.load("", name)
+            self._file_mgr.save_last_open(name)
             self._session.start(0)
             self._refresh.request_full()
             return True
         if action == KeyAction.OPEN_DOC:
             from writerdeck.modes.file_picker import FilePickerOverlay
-            self._overlay = FilePickerOverlay(self._file_mgr.list_documents())
+            self._overlay = FilePickerOverlay(
+                list_entries=self._file_mgr.list_entries,
+                create_folder=self._file_mgr.create_folder,
+                rename=self._file_mgr.rename,
+                delete=self._file_mgr.delete,
+            )
             self._refresh.request_full()
             return True
         if action == KeyAction.FIND:
@@ -275,7 +288,31 @@ class App:
                 self._file_mgr.force_autosave(self._doc)
                 self._session.persist(self._doc.word_count)
                 self._file_mgr.load(name, self._doc)
+                self._file_mgr.save_last_open(name)
                 self._session.start(self._doc.word_count)
+            elif "save_as" in result:
+                new_name = result["save_as"]
+                self._doc.name = new_name
+                self._file_mgr.save(self._doc)
+                self._file_mgr.save_last_open(new_name)
+                self._session.persist(self._doc.word_count)
+                self._status.show("Saved")
+                self._refresh.request_full()
+            elif "renamed" in result:
+                old = result["renamed"]["from"]
+                new = result["renamed"]["to"]
+                if self._doc.name == old:
+                    self._doc.name = new
+                from pathlib import Path as _Path
+                self._status.show(f"Renamed to {_Path(new).name}")
+            elif "deleted" in result:
+                name = result["deleted"]
+                if self._doc.name == name:
+                    new_name = self._file_mgr.new_document_name()
+                    self._doc.load("", new_name)
+                    self._file_mgr.save_last_open(new_name)
+                    self._session.start(0)
+                self._status.show("Deleted")
             elif "font" in result:
                 logger.info("Font changed to: %s", result["font"])
                 # Rebuild modes with new font

@@ -227,19 +227,196 @@ class TestFileManagerListDocuments:
         assert docs == ["same"]
 
 
+class TestFileManagerListEntries:
+    def test_lists_files(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "alpha.txt").write_text("a")
+        (tmp_path / "beta.txt").write_text("b")
+        entries = fm.list_entries()
+        assert entries == [("alpha", False), ("beta", False)]
+
+    def test_lists_folders_first(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "notes.txt").write_text("a")
+        (tmp_path / "projects").mkdir()
+        entries = fm.list_entries()
+        assert entries == [("projects", True), ("notes", False)]
+
+    def test_skips_autosave_and_tmp(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "doc.txt").write_text("a")
+        (tmp_path / "doc.autosave").write_text("a")
+        (tmp_path / "doc.tmp").write_text("a")
+        entries = fm.list_entries()
+        assert entries == [("doc", False)]
+
+    def test_skips_hidden(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / ".hidden.txt").write_text("a")
+        (tmp_path / "visible.txt").write_text("a")
+        entries = fm.list_entries()
+        assert entries == [("visible", False)]
+
+    def test_subfolder_listing(self, tmp_path):
+        fm = FileManager(tmp_path)
+        sub = tmp_path / "projects"
+        sub.mkdir()
+        (sub / "novel.txt").write_text("a")
+        entries = fm.list_entries("projects")
+        assert entries == [("novel", False)]
+
+    def test_nonexistent_subfolder(self, tmp_path):
+        fm = FileManager(tmp_path)
+        assert fm.list_entries("nonexistent") == []
+
+
+class TestFileManagerCreateFolder:
+    def test_creates_folder(self, tmp_path):
+        fm = FileManager(tmp_path)
+        fm.create_folder("projects")
+        assert (tmp_path / "projects").is_dir()
+
+    def test_creates_nested_folder(self, tmp_path):
+        fm = FileManager(tmp_path)
+        fm.create_folder("projects/fiction")
+        assert (tmp_path / "projects" / "fiction").is_dir()
+
+    def test_idempotent(self, tmp_path):
+        fm = FileManager(tmp_path)
+        fm.create_folder("projects")
+        fm.create_folder("projects")  # should not raise
+        assert (tmp_path / "projects").is_dir()
+
+
+class TestFileManagerRename:
+    def test_renames_file(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "old.txt").write_text("content")
+        fm.rename("old", "new")
+        assert not (tmp_path / "old.txt").exists()
+        assert (tmp_path / "new.txt").read_text() == "content"
+
+    def test_renames_autosave_too(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "old.txt").write_text("content")
+        (tmp_path / "old.autosave").write_text("autosave")
+        fm.rename("old", "new")
+        assert not (tmp_path / "old.autosave").exists()
+        assert (tmp_path / "new.autosave").exists()
+
+    def test_rename_into_subfolder(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "doc.txt").write_text("content")
+        (tmp_path / "projects").mkdir()
+        fm.rename("doc", "projects/doc")
+        assert not (tmp_path / "doc.txt").exists()
+        assert (tmp_path / "projects" / "doc.txt").read_text() == "content"
+
+    def test_rename_creates_parent_dir(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "doc.txt").write_text("content")
+        fm.rename("doc", "newdir/doc")
+        assert (tmp_path / "newdir" / "doc.txt").exists()
+
+    def test_rename_missing_file_does_not_raise(self, tmp_path):
+        fm = FileManager(tmp_path)
+        fm.rename("nonexistent", "new")  # should not raise
+
+
+class TestFileManagerDelete:
+    def test_deletes_file(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "doc.txt").write_text("content")
+        fm.delete("doc")
+        assert not (tmp_path / "doc.txt").exists()
+
+    def test_deletes_autosave_too(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "doc.txt").write_text("content")
+        (tmp_path / "doc.autosave").write_text("autosave")
+        fm.delete("doc")
+        assert not (tmp_path / "doc.txt").exists()
+        assert not (tmp_path / "doc.autosave").exists()
+
+    def test_delete_missing_file_does_not_raise(self, tmp_path):
+        fm = FileManager(tmp_path)
+        fm.delete("nonexistent")  # should not raise
+
+
+class TestFileManagerMostRecent:
+    def test_returns_none_when_empty(self, tmp_path):
+        fm = FileManager(tmp_path)
+        assert fm.most_recent_document() is None
+
+    def test_returns_only_document(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "doc.txt").write_text("hello")
+        assert fm.most_recent_document() == "doc"
+
+    def test_returns_most_recently_modified(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "old.txt").write_text("old")
+        time.sleep(0.05)
+        (tmp_path / "new.txt").write_text("new")
+        assert fm.most_recent_document() == "new"
+
+    def test_finds_doc_in_subfolder(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "projects").mkdir()
+        time.sleep(0.05)
+        (tmp_path / "projects" / "novel.txt").write_text("content")
+        assert fm.most_recent_document() == "projects/novel"
+
+    def test_ignores_autosave(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "doc.autosave").write_text("autosave")
+        assert fm.most_recent_document() is None
+
+
+class TestFileManagerLastOpen:
+    def test_returns_none_when_no_state(self, tmp_path):
+        fm = FileManager(tmp_path)
+        assert fm.load_last_open() is None
+
+    def test_save_and_load(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "my-doc.txt").write_text("content")
+        fm.save_last_open("my-doc")
+        assert fm.load_last_open() == "my-doc"
+
+    def test_returns_none_if_file_deleted(self, tmp_path):
+        fm = FileManager(tmp_path)
+        fm.save_last_open("gone")
+        assert fm.load_last_open() is None
+
+    def test_works_with_subfolder_doc(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "projects").mkdir()
+        (tmp_path / "projects" / "novel.txt").write_text("content")
+        fm.save_last_open("projects/novel")
+        assert fm.load_last_open() == "projects/novel"
+
+
 class TestFileManagerNewDocumentName:
-    def test_first_untitled(self, tmp_path):
+    def test_returns_datetime_format(self, tmp_path):
+        import re
         fm = FileManager(tmp_path)
-        assert fm.new_document_name() == "untitled-1"
+        name = fm.new_document_name()
+        assert re.match(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}", name)
 
-    def test_skips_existing(self, tmp_path):
+    def test_avoids_collision(self, tmp_path):
         fm = FileManager(tmp_path)
-        (tmp_path / "untitled-1.txt").write_text("")
-        assert fm.new_document_name() == "untitled-2"
+        base = fm.new_document_name()
+        (tmp_path / f"{base}.txt").write_text("")
+        name2 = fm.new_document_name()
+        assert name2 != base
+        assert name2.startswith(base)
 
-    def test_skips_multiple_existing(self, tmp_path):
+    def test_skips_multiple_collisions(self, tmp_path):
         fm = FileManager(tmp_path)
-        (tmp_path / "untitled-1.txt").write_text("")
-        (tmp_path / "untitled-2.txt").write_text("")
-        (tmp_path / "untitled-3.txt").write_text("")
-        assert fm.new_document_name() == "untitled-4"
+        base = fm.new_document_name()
+        (tmp_path / f"{base}.txt").write_text("")
+        (tmp_path / f"{base}-2.txt").write_text("")
+        (tmp_path / f"{base}-3.txt").write_text("")
+        name = fm.new_document_name()
+        assert name == f"{base}-4"

@@ -6,6 +6,7 @@ import logging
 import os
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -51,6 +52,7 @@ class FileManager:
 
     def save(self, doc: Document) -> Path:
         path = self._doc_path(doc.name)
+        path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(path, doc.text)
         # Remove autosave file on explicit save
         autosave_path = self._autosave_path(doc.name)
@@ -103,16 +105,118 @@ class FileManager:
                 stems.add(p.stem)
         return sorted(stems)
 
+    def list_entries(self, subfolder: str = "", sort_by_modified: bool = False) -> list[tuple[str, bool]]:
+        """Return (name, is_dir) pairs in subfolder, folders first then files."""
+        base = self._dir / subfolder if subfolder else self._dir
+        if not base.exists():
+            return []
+        entries: list[tuple[str, bool, float]] = []
+        try:
+            for p in base.iterdir():
+                if p.name.startswith("."):
+                    continue
+                mtime = p.stat().st_mtime
+                if p.is_dir():
+                    entries.append((p.name, True, mtime))
+                elif p.suffix in (".txt", ".md") and not p.name.endswith(".autosave") and not p.name.endswith(".tmp"):
+                    entries.append((p.stem, False, mtime))
+        except PermissionError:
+            pass
+        if sort_by_modified:
+            entries.sort(key=lambda x: (not x[1], -x[2]))
+        else:
+            entries.sort(key=lambda x: (not x[1], x[0].lower()))
+        return [(name, is_dir) for name, is_dir, _ in entries]
+
+    def create_folder(self, path: str) -> None:
+        """Create a subfolder under the documents directory."""
+        (self._dir / path).mkdir(parents=True, exist_ok=True)
+        logger.info("Created folder %s", self._dir / path)
+
+    def rename(self, old_name: str, new_name: str) -> None:
+        """Rename a document (and its autosave if present)."""
+        old_path = self._doc_path(old_name)
+        new_path = self._doc_path(new_name)
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        if old_path.exists():
+            old_path.rename(new_path)
+        old_auto = self._autosave_path(old_name)
+        new_auto = self._autosave_path(new_name)
+        if old_auto.exists():
+            old_auto.rename(new_auto)
+        logger.info("Renamed %s -> %s", old_name, new_name)
+
+    def delete(self, name: str) -> None:
+        """Delete a document and its autosave file."""
+        path = self._doc_path(name)
+        if path.exists():
+            path.unlink()
+        auto = self._autosave_path(name)
+        if auto.exists():
+            auto.unlink()
+        logger.info("Deleted %s", name)
+
+    def most_recent_document(self) -> str | None:
+        """Return the name of the most recently modified document."""
+        best: str | None = None
+        best_mtime = 0.0
+        for p in self._dir.rglob("*"):
+            if not p.is_file():
+                continue
+            if p.suffix not in (".txt", ".md"):
+                continue
+            if p.name.startswith(".") or p.name.endswith(".tmp"):
+                continue
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            if mtime > best_mtime:
+                best_mtime = mtime
+                rel = p.relative_to(self._dir)
+                parts = list(rel.parts)
+                parts[-1] = Path(parts[-1]).stem
+                best = "/".join(parts)
+        return best
+
+    def save_last_open(self, name: str) -> None:
+        """Persist the name of the last opened document."""
+        try:
+            (self._dir / ".last_open").write_text(name, encoding="utf-8")
+        except OSError:
+            pass
+
+    def load_last_open(self) -> str | None:
+        """Return the last opened document name if the file still exists."""
+        p = self._dir / ".last_open"
+        if not p.exists():
+            return None
+        try:
+            name = p.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        if not name:
+            return None
+        # Verify the document file still exists
+        if self._doc_path(name).exists() or self._autosave_path(name).exists():
+            return name
+        return None
+
     def new_document_name(self) -> str:
+        now = datetime.now()
+        base = now.strftime("%Y-%m-%d_%H-%M")
         existing = set(self.list_documents())
-        for i in range(1, 10000):
-            name = f"untitled-{i}"
+        if base not in existing:
+            return base
+        for i in range(2, 10000):
+            name = f"{base}-{i}"
             if name not in existing:
                 return name
-        return f"untitled-{int(time.time())}"
+        return f"{base}-{int(time.time())}"
 
     def _autosave(self, doc: Document) -> None:
         path = self._autosave_path(doc.name)
+        path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(path, doc.text)
         logger.debug("Autosaved %s", path)
 

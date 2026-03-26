@@ -73,38 +73,49 @@ class TestFontPickerRender:
         assert overlay._selected == 2
 
 
+def _make_file_picker(docs: list[str]) -> FilePickerOverlay:
+    """Build a FilePickerOverlay with stub callbacks and a static doc list."""
+    entries = [(name, False) for name in docs]
+    return FilePickerOverlay(
+        list_entries=lambda subfolder="", sort_by_modified=False: entries,
+        create_folder=lambda path: None,
+        rename=lambda old, new: None,
+        delete=lambda name: None,
+    )
+
+
 class TestFilePickerRender:
     def test_renders_document_list(self):
-        overlay = FilePickerOverlay(["doc-1", "doc-2"])
+        overlay = _make_file_picker(["doc-1", "doc-2"])
         frame = overlay.render(_base_frame())
         text = "\n".join(frame.text_lines)
         assert "doc-1" in text
         assert "doc-2" in text
 
     def test_selected_item_has_prefix(self):
-        overlay = FilePickerOverlay(["doc-1", "doc-2"])
+        overlay = _make_file_picker(["doc-1", "doc-2"])
         frame = overlay.render(_base_frame())
         found = any("> doc-1" in line for line in frame.text_lines)
         assert found
 
     def test_cursor_hidden(self):
-        overlay = FilePickerOverlay(["doc-1"])
+        overlay = _make_file_picker(["doc-1"])
         frame = overlay.render(_base_frame())
         assert frame.show_cursor is False
 
     def test_force_full_refresh(self):
-        overlay = FilePickerOverlay(["doc-1"])
+        overlay = _make_file_picker(["doc-1"])
         frame = overlay.render(_base_frame())
         assert frame.force_full_refresh is True
 
     def test_empty_list_shows_placeholder(self):
-        overlay = FilePickerOverlay([])
+        overlay = _make_file_picker([])
         frame = overlay.render(_base_frame())
         text = "\n".join(frame.text_lines)
-        assert "no documents" in text.lower()
+        assert "empty" in text.lower()
 
     def test_boundary_navigation(self):
-        overlay = FilePickerOverlay(["a", "b"])
+        overlay = _make_file_picker(["a", "b"])
         overlay.handle_input(KeyAction.ARROW_UP, "")  # past start
         assert overlay._selected == 0
         overlay.handle_input(KeyAction.ARROW_DOWN, "")
@@ -112,7 +123,7 @@ class TestFilePickerRender:
         assert overlay._selected == 1
 
     def test_unhandled_action_returns_none(self):
-        overlay = FilePickerOverlay(["a"])
+        overlay = _make_file_picker(["a"])
         result = overlay.handle_input(KeyAction.CHAR, "x")
         assert result is None
 

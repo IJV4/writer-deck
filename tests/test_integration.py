@@ -122,18 +122,28 @@ class TestFontPicker:
         assert result == {}
 
 
+def _make_file_picker(docs: list[str]) -> FilePickerOverlay:
+    entries = [(name, False) for name in docs]
+    return FilePickerOverlay(
+        list_entries=lambda subfolder="", sort_by_modified=False: entries,
+        create_folder=lambda path: None,
+        rename=lambda old, new: None,
+        delete=lambda name: None,
+    )
+
+
 class TestFilePicker:
     def test_navigate_and_open(self):
-        overlay = FilePickerOverlay(["doc-1", "doc-2", "doc-3"])
+        overlay = _make_file_picker(["doc-1", "doc-2", "doc-3"])
         overlay.handle_input(KeyAction.ARROW_DOWN, "")
         overlay.handle_input(KeyAction.ARROW_DOWN, "")
         result = overlay.handle_input(KeyAction.ENTER, "")
         assert result == {"open_doc": "doc-3"}
 
     def test_empty_list(self):
-        overlay = FilePickerOverlay([])
+        overlay = _make_file_picker([])
         result = overlay.handle_input(KeyAction.ENTER, "")
-        assert result == {}  # "(no documents)" is not a real doc
+        assert result == {}  # empty list closes picker
 
 
 class TestFindOverlay:

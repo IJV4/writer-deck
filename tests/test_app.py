@@ -105,6 +105,8 @@ class TestHandleAction:
 
         from writerdeck.core.app import App
         app = App()
+        # Pre-create the file on disk so SAVE doesn't prompt for a name
+        (tmp_path / "test-doc.txt").write_text("test content")
         app._doc.load("test content", "test-doc")
         app._doc.dirty = True
         app._handle_action(KeyAction.SAVE, "")
@@ -175,8 +177,9 @@ class TestHandleAction:
         app._doc.load("old content", "old-doc")
         app._doc.insert("x")
         app._handle_action(KeyAction.NEW_DOC, "")
+        import re
         assert app._doc.text == ""
-        assert app._doc.name.startswith("untitled")
+        assert re.match(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}", app._doc.name)
 
     @patch("writerdeck.core.app.get_config")
     @patch("writerdeck.core.app.detect_platform")
