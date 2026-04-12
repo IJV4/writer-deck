@@ -2,6 +2,28 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project Context
+
+This workspace includes multiple projects: a writer-deck (Python/Pygame e-paper device for Raspberry Pi), an SWE study dashboard (TypeScript), and seed enrichment tooling. Always check the current working directory and project structure before making changes.
+
+## Environment Notes
+
+- Primary dev environment is WSL. Do NOT assume npm/node are installed — check first with `which node` and `which npm`.
+- For Python projects, always check for and activate the venv before running commands.
+- GUI apps (pygame, browser) cannot open directly in WSL headless — instruct user to run in their terminal instead.
+
+## Configuration
+
+### .env and Config Loading
+
+When configuring .env files, always verify: 1) the file is in the correct directory relative to the entry point, 2) dotenv is loaded BEFORE any module that reads env vars, 3) confirm the values are actually picked up by printing/logging them.
+
+## Safety
+
+### Dangerous Operations
+
+Never use `rm -rf` on project directories. When excluding folders from scp or copy operations, use `--exclude` flags rather than deleting. Always confirm destructive file operations with the user first.
+
 ## What This Is
 
 Writer Deck is a distraction-free writing application for a Raspberry Pi + Waveshare 7.5" e-ink display (800×480). It runs headlessly as a systemd service, reading input from a USB keyboard via `evdev` and rendering 1-bit PIL images to the display. On non-Pi hardware it falls back to a `NullDriver` (saves PNG frames to `/tmp/writer-deck/`) and a `StdinReader`.

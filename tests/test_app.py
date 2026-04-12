@@ -330,7 +330,10 @@ class TestOnAnyKey:
         app._display_sleeping = True
         app._on_any_key()
         assert app._display_sleeping is False
-        app._driver.wake.assert_called()
+        # wake() must NOT be called from the keyboard background thread (EPD
+        # SPI is not thread-safe); the flag signals the main thread to do it.
+        app._driver.wake.assert_not_called()
+        assert app._needs_display_wake is True
 
     def test_reverses_tier2(self, tmp_path):
         app = self._make_app(tmp_path)

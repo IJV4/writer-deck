@@ -19,13 +19,18 @@ class DistractionFreeMode(BaseMode):
         self._font_size = font_size
 
     def handle_input(self, action: KeyAction, char: str, doc: Document) -> bool:
+        result = self._handle_visual_updown(action, char, doc)
+        if result is not None:
+            return result
         return self._apply_common_input(action, char, doc)
 
     def render(self, doc: Document, session: Session) -> RenderFrame:
-        wrapped, cursor_line, cursor_col = wrap_lines(
+        wrapped, cursor_line, cursor_col, row_map = wrap_lines(
             doc.lines, doc.cursor_line, doc.cursor_col,
             self._font_family, self._font_size, self._text_width_px,
         )
+        self._wrapped_lines = wrapped
+        self._row_map = row_map
 
         # Apply scroll offset for page up/down
         visible = wrapped

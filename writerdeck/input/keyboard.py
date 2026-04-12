@@ -41,13 +41,26 @@ class KeyboardReader:
     def _resolve_device(self) -> str | None:
         if self._device_path != "auto":
             return self._device_path
-        # Try to find a keyboard device
+        # Try to find a keyboard device via stable by-id symlinks.
+        # Sort for determinism; skip mouse/joystick entries.
         by_id = Path("/dev/input/by-id")
         if by_id.exists():
-            for p in by_id.iterdir():
-                if "kbd" in p.name.lower() or "keyboard" in p.name.lower():
+            candidates = sorted(by_id.iterdir())
+            # First pass: prefer explicit event-kbd entries (most specific)
+            for p in candidates:
+                name = p.name.lower()
+                if "mouse" in name or "joystick" in name:
+                    continue
+                if "event-kbd" in name or name.endswith("-kbd"):
                     return str(p.resolve())
-        # Fallback: scan /dev/input/event*
+            # Second pass: any keyboard-named entry that isn't a mouse device
+            for p in candidates:
+                name = p.name.lower()
+                if "mouse" in name or "joystick" in name:
+                    continue
+                if "keyboard" in name or "kbd" in name:
+                    return str(p.resolve())
+        # Fallback: first event* device
         for p in sorted(Path("/dev/input").glob("event*")):
             return str(p)
         return None
@@ -66,7 +79,7 @@ class KeyboardReader:
 
         try:
             dev = evdev.InputDevice(device_path)
-        except (PermissionError, FileNotFoundError) as exc:
+        except OSError as exc:
             logger.error("Cannot open %s: %s", device_path, exc)
             return
 

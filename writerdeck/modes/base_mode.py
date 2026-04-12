@@ -34,6 +34,9 @@ class BaseMode(ABC):
 
     def __init__(self) -> None:
         self._scroll_offset: int = 0
+        # Set by render() so handle_input() can do visual-row Up/Down navigation.
+        self._wrapped_lines: list[str] = []
+        self._row_map: list[tuple[int, int]] = []  # [(doc_line_idx, char_start), ...]
 
     def on_enter(self) -> None:
         self._scroll_offset = 0
@@ -50,6 +53,81 @@ class BaseMode(ABC):
     def render(self, doc: Document, session: Session) -> RenderFrame:
         """Produce a RenderFrame for the current document state."""
         ...
+
+    # -- Visual row navigation ---------------------------------------------
+
+    def _find_visual_row(self, doc_line: int, doc_col: int) -> int:
+        """Return the visual row index for the given document cursor position.
+
+        When a doc line wraps to multiple visual rows, picks the row whose
+        char_start is <= doc_col (the deepest match).
+        """
+        best = 0
+        for i, (dl, start) in enumerate(self._row_map):
+            if dl == doc_line and start <= doc_col:
+                best = i
+        return best
+
+    def _visual_move(self, doc: Document, delta: int, extend: bool) -> bool:
+        """Move the cursor one visual row up (delta=-1) or down (delta=+1).
+
+        Returns True if the action was handled (even if cursor didn't move
+        because it's already at the first/last visual row).  Returns False
+        only when no row_map is available yet (fallback to doc-level move).
+        """
+        if not self._row_map:
+            return False
+
+        vr = self._find_visual_row(doc.cursor_line, doc.cursor_col)
+        # Column offset within the current visual row
+        visual_col = doc.cursor_col - self._row_map[vr][1]
+
+        target_vr = vr + delta
+        if target_vr < 0 or target_vr >= len(self._row_map):
+            # Already at the first or last visual row — consume the event so
+            # _apply_common_input doesn't jump to the previous/next doc line.
+            return True
+
+        doc._start_or_extend_selection(extend)
+        target_doc_line, target_start = self._row_map[target_vr]
+        target_sub_len = len(self._wrapped_lines[target_vr])
+        doc.cursor_line = target_doc_line
+        doc.cursor_col = target_start + min(visual_col, target_sub_len)
+        doc._update_selection_end()
+        return True
+
+    def _handle_visual_updown(
+        self, action: KeyAction, char: str, doc: Document
+    ) -> bool | None:
+        """Intercept Up/Down/SelectUp/SelectDown for visual-row navigation.
+
+        Returns True/False if the action was an Up/Down variant (handled or
+        not).  Returns None if the action is something else (caller should
+        continue to _apply_common_input).
+        """
+        if action == KeyAction.ARROW_UP:
+            result = self._visual_move(doc, -1, extend=False)
+            if result:
+                self._scroll_offset = 0
+            return result
+        if action == KeyAction.ARROW_DOWN:
+            result = self._visual_move(doc, +1, extend=False)
+            if result:
+                self._scroll_offset = 0
+            return result
+        if action == KeyAction.SELECT_UP:
+            result = self._visual_move(doc, -1, extend=True)
+            if result:
+                self._scroll_offset = 0
+            return result
+        if action == KeyAction.SELECT_DOWN:
+            result = self._visual_move(doc, +1, extend=True)
+            if result:
+                self._scroll_offset = 0
+            return result
+        return None
+
+    # -- Standard key dispatch ---------------------------------------------
 
     def _apply_common_input(
         self, action: KeyAction, char: str, doc: Document

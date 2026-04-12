@@ -12,3 +12,4 @@ htmlcov/
 .coverage
 *:Zone.Identifier
 .claude/
+.venv/

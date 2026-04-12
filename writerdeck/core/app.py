@@ -7,6 +7,7 @@ import os
 import queue
 import signal
 import socket
+import threading
 import time
 from typing import TYPE_CHECKING
 
@@ -93,6 +94,10 @@ class App:
         # Sleep tiers state
         self._tier2_active = False
         self._tier3_active = False
+        self._needs_display_wake = False  # set by _on_any_key; handled on main thread
+
+        # Wakeup event — set by _on_any_key() to interrupt the loop's idle sleep
+        self._wakeup = threading.Event()
 
     def _build_modes(self) -> list[BaseMode]:
         font = self._config.font_family
@@ -196,12 +201,17 @@ class App:
 
             # Render if something changed
             if changed and not self._display_sleeping:
+                if self._needs_display_wake:
+                    self._driver.wake()
+                    self._needs_display_wake = False
+                    logger.info("Display woken from sleep")
                 self._render_and_refresh()
 
             # Watchdog
             self._notify_watchdog()
 
-            time.sleep(interval)
+            self._wakeup.wait(timeout=interval)
+            self._wakeup.clear()
 
         # Main loop exited — run cleanup once
         self._do_shutdown()
@@ -386,6 +396,15 @@ class App:
 
         will_full = self._refresh.should_full_refresh()
 
+        # During active typing, suppress streak-triggered full refreshes so
+        # rapid input doesn't cause 1-second interruptions.  Force and
+        # idle-timer triggers still fire; ghosting is cleaned up when the
+        # user pauses and the idle timer fires.
+        if will_full:
+            idle_since_key = time.monotonic() - self._last_keypress
+            if idle_since_key < 2.0:
+                will_full = self._refresh.should_full_refresh_no_streak()
+
         if will_full:
             idle_secs = time.monotonic() - self._last_keypress
             deep_clean_threshold = self._config.idle_deep_clean_seconds
@@ -409,12 +428,15 @@ class App:
         self._refresh.record_refresh(was_full=will_full)
 
     def _on_any_key(self) -> None:
+        self._wakeup.set()
         self._last_keypress = time.monotonic()
         if self._display_sleeping:
+            # Don't touch the display driver here — we're on the keyboard
+            # background thread and EPD SPI is not thread-safe.  Signal the
+            # main thread to call wake() before the next render.
             self._display_sleeping = False
-            self._driver.wake()
+            self._needs_display_wake = True
             self._refresh.request_full()
-            logger.info("Display woken from sleep")
         # Reverse sleep tiers
         if self._tier2_active:
             self._exit_cpu_powersave()

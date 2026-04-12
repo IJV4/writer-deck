@@ -25,6 +25,19 @@ class RefreshManager:
             return True
         return False
 
+    def should_full_refresh_no_streak(self) -> bool:
+        """Like should_full_refresh() but ignores the streak counter.
+
+        Used during active typing so that streak-based full refreshes don't
+        cause 1-second interruptions mid-burst.  Force and idle-timer triggers
+        still fire normally; ghosting is cleaned up when the user pauses.
+        """
+        if self._force_full:
+            return True
+        if time.monotonic() - self._last_refresh_time >= self._idle_full_seconds:
+            return True
+        return False
+
     def record_refresh(self, was_full: bool) -> None:
         if was_full:
             self._partial_streak = 0

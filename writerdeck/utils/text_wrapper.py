@@ -12,14 +12,18 @@ def wrap_lines(
     font_family: str,
     font_size: int,
     max_width_px: int,
-) -> tuple[list[str], int, int]:
+) -> tuple[list[str], int, int, list[tuple[int, int]]]:
     """Wrap document lines to fit within max_width_px.
 
     Returns:
-        (wrapped_lines, new_cursor_line, new_cursor_col)
+        (wrapped_lines, new_cursor_line, new_cursor_col, row_map)
+
+        row_map[i] = (doc_line_idx, char_start_in_doc_line) for visual row i.
+        Use row_map for visual up/down navigation.
     """
     font = get_font(font_family, font_size)
     wrapped: list[str] = []
+    row_map: list[tuple[int, int]] = []
     new_cursor_line = 0
     new_cursor_col = cursor_col
 
@@ -28,25 +32,49 @@ def wrap_lines(
             if line_idx == cursor_line:
                 new_cursor_line = len(wrapped)
                 new_cursor_col = 0
+            row_map.append((line_idx, 0))
             wrapped.append("")
             continue
 
         sub_lines = _wrap_single_line(line, font, max_width_px)
+        offsets = _subline_offsets(line, sub_lines)
 
         if line_idx == cursor_line:
-            # Find which sub-line the cursor falls in
-            pos = 0
-            for i, sub in enumerate(sub_lines):
-                sub_end = pos + len(sub)
-                if cursor_col <= sub_end or i == len(sub_lines) - 1:
+            # Find which sub-line the cursor falls in using real char offsets
+            for i, (sub, start) in enumerate(zip(sub_lines, offsets)):
+                end = start + len(sub)
+                if cursor_col <= end or i == len(sub_lines) - 1:
                     new_cursor_line = len(wrapped) + i
-                    new_cursor_col = cursor_col - pos
+                    new_cursor_col = cursor_col - start
                     break
-                pos = sub_end
 
-        wrapped.extend(sub_lines)
+        for sub, start in zip(sub_lines, offsets):
+            row_map.append((line_idx, start))
+            wrapped.append(sub)
 
-    return wrapped, new_cursor_line, new_cursor_col
+    return wrapped, new_cursor_line, new_cursor_col, row_map
+
+
+def _subline_offsets(line: str, sub_lines: list[str]) -> list[int]:
+    """Find the start offset of each sub-line within the original line.
+
+    Uses str.find advancing from the previous match end, so it handles
+    repeated sub-strings and both word-wrap and char-break cases correctly.
+    """
+    offsets: list[int] = []
+    search_from = 0
+    for sub in sub_lines:
+        if not sub:
+            offsets.append(search_from)
+            continue
+        idx = line.find(sub, search_from)
+        if idx < 0:
+            # Shouldn't happen with valid wrapping, but safe fallback
+            offsets.append(search_from)
+        else:
+            offsets.append(idx)
+            search_from = idx + len(sub)
+    return offsets
 
 
 def _wrap_single_line(line: str, font, max_width_px: int) -> list[str]:
