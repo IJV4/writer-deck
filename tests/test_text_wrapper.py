@@ -1,6 +1,6 @@
 """Tests for pixel-aware text wrapper."""
 
-from writerdeck.utils.text_wrapper import wrap_lines, _wrap_single_line, _break_word, _subline_offsets
+from writerdeck.utils.text_wrapper import wrap_lines, map_selection, _wrap_single_line, _break_word, _subline_offsets
 from writerdeck.display.fonts import get_font
 
 
@@ -192,3 +192,38 @@ def test_subline_offsets_repeated_word():
     offsets = _subline_offsets("foo foo foo", ["foo foo", "foo"])
     assert offsets[0] == 0
     assert offsets[1] == 8
+
+
+class TestMapSelection:
+    def _make_row_map(self, doc_lines, font_family="Hack", font_size=14, width=800):
+        _, _, _, row_map = wrap_lines(doc_lines, 0, 0, font_family, font_size, width)
+        return row_map
+
+    def test_no_wrap_identity(self):
+        # Single short line, no wrap: doc coords == visual coords
+        row_map = self._make_row_map(["hello"])
+        result = map_selection((0, 0, 0, 5), row_map)
+        assert result == (0, 0, 0, 5)
+
+    def test_multiline_no_wrap(self):
+        # Two short lines, no wrap: doc line 1 == visual line 1
+        row_map = self._make_row_map(["hello", "world"])
+        result = map_selection((0, 0, 1, 5), row_map)
+        assert result == (0, 0, 1, 5)
+
+    def test_wrapped_line_select_all(self):
+        # Line 0 wraps into 2 visual rows; line 1 is visual row 2.
+        # select_all should map end to visual row 2, not doc row 1.
+        long_line = "word " * 30  # forces wrap at 800px
+        _, _, _, row_map = wrap_lines([long_line, "end"], 0, 0, "Hack", 14, 800)
+        num_visual = len(row_map)
+        assert num_visual > 2, "expected wrap to produce >2 visual rows"
+        result = map_selection((0, 0, 1, 3), row_map)
+        v_el = result[2]
+        assert v_el == num_visual - 1
+
+    def test_scroll_offset_subtracted(self):
+        row_map = self._make_row_map(["hello", "world", "foo"])
+        # scroll_offset=1 means visual row 1 becomes index 0 in visible area
+        result = map_selection((1, 0, 2, 3), row_map, scroll_offset=1)
+        assert result == (0, 0, 1, 3)

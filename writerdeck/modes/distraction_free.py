@@ -6,7 +6,7 @@ from writerdeck.core.document import Document
 from writerdeck.core.session import Session
 from writerdeck.input.keymapper import KeyAction
 from writerdeck.modes.base_mode import BaseMode, RenderFrame
-from writerdeck.utils.text_wrapper import wrap_lines
+from writerdeck.utils.text_wrapper import map_selection, wrap_lines
 
 
 class DistractionFreeMode(BaseMode):
@@ -44,8 +44,10 @@ class DistractionFreeMode(BaseMode):
 
         stats = {"Words": str(doc.word_count)}
 
-        # Selection coordinates in wrapped space
-        selection = _map_selection(doc, wrapped, cursor_line)
+        selection = (
+            map_selection(doc.selection.ordered(), row_map, self._scroll_offset)
+            if doc.selection is not None else None
+        )
 
         return RenderFrame(
             text_lines=visible,
@@ -60,11 +62,3 @@ class DistractionFreeMode(BaseMode):
             selection=selection,
         )
 
-
-def _map_selection(doc: Document, wrapped: list[str], cursor_line: int) -> tuple[int, int, int, int] | None:
-    """Map document selection to wrapped-line coordinates (stub — returns None for now)."""
-    if doc.selection is None:
-        return None
-    # For simplicity, return the ordered selection coords directly
-    # A full implementation would map through the wrap mapping
-    return doc.selection.ordered()

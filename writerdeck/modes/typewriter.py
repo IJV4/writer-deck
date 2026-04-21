@@ -6,7 +6,7 @@ from writerdeck.core.document import Document
 from writerdeck.core.session import Session
 from writerdeck.input.keymapper import KeyAction
 from writerdeck.modes.base_mode import BaseMode, RenderFrame
-from writerdeck.utils.text_wrapper import wrap_lines
+from writerdeck.utils.text_wrapper import map_selection, wrap_lines
 from writerdeck.display.driver import HEIGHT
 
 
@@ -70,9 +70,10 @@ class TypewriterMode(BaseMode):
 
         stats = {"Words": str(doc.word_count)}
 
-        selection = None
-        if doc.selection is not None:
-            selection = doc.selection.ordered()
+        selection = (
+            map_selection(doc.selection.ordered(), row_map, start)
+            if doc.selection is not None else None
+        )
 
         return RenderFrame(
             text_lines=visible,

@@ -55,6 +55,32 @@ def wrap_lines(
     return wrapped, new_cursor_line, new_cursor_col, row_map
 
 
+def map_selection(
+    ordered_sel: tuple[int, int, int, int],
+    row_map: list[tuple[int, int]],
+    scroll_offset: int = 0,
+) -> tuple[int, int, int, int]:
+    """Convert ordered doc-space (line, col) selection to visual wrapped-line coordinates.
+
+    row_map[i] = (doc_line_idx, char_start_in_doc_line) as returned by wrap_lines.
+    scroll_offset is subtracted so coords align with the visible slice of wrapped lines.
+    """
+    sl, sc, el, ec = ordered_sel
+
+    def doc_to_visual(doc_line: int, doc_col: int) -> tuple[int, int]:
+        best = 0
+        for i, (dl, offset) in enumerate(row_map):
+            if dl == doc_line and offset <= doc_col:
+                best = i
+            elif dl > doc_line:
+                break
+        return best - scroll_offset, doc_col - row_map[best][1]
+
+    v_sl, v_sc = doc_to_visual(sl, sc)
+    v_el, v_ec = doc_to_visual(el, ec)
+    return v_sl, v_sc, v_el, v_ec
+
+
 def _subline_offsets(line: str, sub_lines: list[str]) -> list[int]:
     """Find the start offset of each sub-line within the original line.
 
