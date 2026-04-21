@@ -394,19 +394,17 @@ class App:
         if force_full or frame.force_full_refresh:
             self._refresh.request_full()
 
+        idle_secs = time.monotonic() - self._last_keypress
         will_full = self._refresh.should_full_refresh()
 
         # During active typing, suppress streak-triggered full refreshes so
         # rapid input doesn't cause 1-second interruptions.  Force and
         # idle-timer triggers still fire; ghosting is cleaned up when the
         # user pauses and the idle timer fires.
-        if will_full:
-            idle_since_key = time.monotonic() - self._last_keypress
-            if idle_since_key < 2.0:
-                will_full = self._refresh.should_full_refresh_no_streak()
+        if will_full and idle_secs < 2.0:
+            will_full = self._refresh.should_full_refresh(ignore_streak=True)
 
         if will_full:
-            idle_secs = time.monotonic() - self._last_keypress
             deep_clean_threshold = self._config.idle_deep_clean_seconds
             is_deep_clean = deep_clean_threshold > 0 and idle_secs >= deep_clean_threshold
 

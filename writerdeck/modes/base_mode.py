@@ -64,6 +64,8 @@ class BaseMode(ABC):
         """
         best = 0
         for i, (dl, start) in enumerate(self._row_map):
+            if dl > doc_line:
+                break
             if dl == doc_line and start <= doc_col:
                 best = i
         return best
@@ -96,6 +98,13 @@ class BaseMode(ABC):
         doc._update_selection_end()
         return True
 
+    _UPDOWN_PARAMS: dict = {
+        KeyAction.ARROW_UP:    (-1, False),
+        KeyAction.ARROW_DOWN:  (+1, False),
+        KeyAction.SELECT_UP:   (-1, True),
+        KeyAction.SELECT_DOWN: (+1, True),
+    }
+
     def _handle_visual_updown(
         self, action: KeyAction, char: str, doc: Document
     ) -> bool | None:
@@ -105,27 +114,13 @@ class BaseMode(ABC):
         not).  Returns None if the action is something else (caller should
         continue to _apply_common_input).
         """
-        if action == KeyAction.ARROW_UP:
-            result = self._visual_move(doc, -1, extend=False)
-            if result:
-                self._scroll_offset = 0
-            return result
-        if action == KeyAction.ARROW_DOWN:
-            result = self._visual_move(doc, +1, extend=False)
-            if result:
-                self._scroll_offset = 0
-            return result
-        if action == KeyAction.SELECT_UP:
-            result = self._visual_move(doc, -1, extend=True)
-            if result:
-                self._scroll_offset = 0
-            return result
-        if action == KeyAction.SELECT_DOWN:
-            result = self._visual_move(doc, +1, extend=True)
-            if result:
-                self._scroll_offset = 0
-            return result
-        return None
+        if action not in self._UPDOWN_PARAMS:
+            return None
+        delta, extend = self._UPDOWN_PARAMS[action]
+        result = self._visual_move(doc, delta, extend)
+        if result:
+            self._scroll_offset = 0
+        return result
 
     # -- Standard key dispatch ---------------------------------------------
 

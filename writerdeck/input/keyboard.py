@@ -45,19 +45,19 @@ class KeyboardReader:
         # Sort for determinism; skip mouse/joystick entries.
         by_id = Path("/dev/input/by-id")
         if by_id.exists():
-            candidates = sorted(by_id.iterdir())
+            # Filter out non-keyboard devices once; iterate the result twice.
+            candidates = [
+                p for p in sorted(by_id.iterdir())
+                if "mouse" not in p.name.lower() and "joystick" not in p.name.lower()
+            ]
             # First pass: prefer explicit event-kbd entries (most specific)
             for p in candidates:
                 name = p.name.lower()
-                if "mouse" in name or "joystick" in name:
-                    continue
                 if "event-kbd" in name or name.endswith("-kbd"):
                     return str(p.resolve())
-            # Second pass: any keyboard-named entry that isn't a mouse device
+            # Second pass: any keyboard-named entry
             for p in candidates:
                 name = p.name.lower()
-                if "mouse" in name or "joystick" in name:
-                    continue
                 if "keyboard" in name or "kbd" in name:
                     return str(p.resolve())
         # Fallback: first event* device
