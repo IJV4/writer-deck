@@ -413,9 +413,6 @@ class App:
                 # any accumulated ghosting. Uses init() waveform, not init_fast().
                 image = render(frame, self._config.font_family, self._config.font_size)
                 self._driver.display_clean(image)
-            elif self._config.use_4gray:
-                image = render(frame, self._config.font_family, self._config.font_size, grayscale=True)
-                self._driver.display_full_4gray(image)
             else:
                 image = render(frame, self._config.font_family, self._config.font_size)
                 self._driver.display_full(image)

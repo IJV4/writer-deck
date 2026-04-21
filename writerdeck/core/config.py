@@ -37,7 +37,6 @@ _SCHEMA: dict[str, tuple[tuple[type, ...], tuple[Any, Any] | None]] = {
     "log_dir": ((str,), None),
     "show_title_bar": ((bool,), None),
     "default_format": ((str,), None),
-    "use_4gray": ((bool,), None),
     "idle_deep_clean_seconds": ((int, float), (0, 86400)),
     "sleep_tiers": ((dict,), None),
 }
@@ -157,9 +156,6 @@ class Config:
     def default_format(self) -> str:
         return self._data.get("default_format", "txt")
 
-    @property
-    def use_4gray(self) -> bool:
-        return bool(self._data.get("use_4gray", False))
 
     @property
     def idle_deep_clean_seconds(self) -> int:

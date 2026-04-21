@@ -25,37 +25,10 @@ class TestRenderBasic:
         img = render(frame, "Hack", 14)
         assert img.mode == "1"
 
-    def test_grayscale_mode_returns_L_image(self):
-        frame = RenderFrame(text_lines=["Hello"])
-        img = render(frame, "Hack", 14, grayscale=True)
-        assert img.mode == "L"
 
-    def test_grayscale_mode_correct_dimensions(self):
-        frame = RenderFrame(text_lines=["Hello"])
-        img = render(frame, "Hack", 14, grayscale=True)
-        assert img.size == (WIDTH, HEIGHT)
 
-    def test_grayscale_background_is_white(self):
-        frame = RenderFrame(text_lines=[])
-        img = render(frame, "Hack", 14, grayscale=True)
-        # All pixels should be 255 (white) with no text
-        pixels = list(img.getdata())
-        assert all(p == 255 for p in pixels)
 
-    def test_grayscale_text_produces_dark_pixels(self):
-        frame = RenderFrame(text_lines=["X"])
-        img = render(frame, "Hack", 14, grayscale=True)
-        # At least some pixels should be dark (text rendered)
-        pixels = list(img.getdata())
-        assert any(p < 128 for p in pixels)
 
-    def test_grayscale_text_has_antialiased_edges(self):
-        # In 'L' mode PIL anti-aliases TrueType text, producing values between
-        # pure black (0) and pure white (255). Check that intermediate values exist.
-        frame = RenderFrame(text_lines=["Hello World"])
-        img = render(frame, "Hack", 14, grayscale=True)
-        pixels = set(img.getdata())
-        assert len(pixels) > 2  # more than just 0 and 255
 
     def test_empty_frame(self):
         frame = RenderFrame(text_lines=[])

@@ -260,42 +260,6 @@ class TestNullDriverDisplay:
         assert img.size == (WIDTH, HEIGHT)
 
 
-class TestEPaperDriver4Gray:
-    def test_calls_init_4gray_on_first_call(self):
-        drv, mock_epd = _make_epd_driver(mode="full")
-        drv.display_full_4gray(Image.new("L", (WIDTH, HEIGHT), 255))
-        mock_epd.init_4Gray.assert_called_once()
-
-    def test_does_not_reinit_when_already_in_4gray_mode(self):
-        drv, mock_epd = _make_epd_driver(mode="4gray")
-        drv.display_full_4gray(Image.new("L", (WIDTH, HEIGHT), 255))
-        mock_epd.init_4Gray.assert_not_called()
-
-    def test_calls_getbuffer_4gray_and_display_4gray(self):
-        drv, mock_epd = _make_epd_driver(mode="full")
-        img = Image.new("L", (WIDTH, HEIGHT), 255)
-        drv.display_full_4gray(img)
-        mock_epd.getbuffer_4Gray.assert_called_once_with(img)
-        mock_epd.display_4Gray.assert_called_once()
-
-    def test_sets_mode_to_4gray(self):
-        drv, mock_epd = _make_epd_driver(mode="full")
-        drv.display_full_4gray(Image.new("L", (WIDTH, HEIGHT), 255))
-        assert drv._mode == "4gray"
-
-    def test_clears_last_buf(self):
-        # After 4Gray, controller RAM is in 4Gray format — _last_buf must be
-        # cleared so the next display_partial() reloads DTM1/DTM2 via fast full.
-        drv, mock_epd = _make_epd_driver(last_buf=_white_buf(), mode="full")
-        drv.display_full_4gray(Image.new("L", (WIDTH, HEIGHT), 255))
-        assert drv._last_buf is None
-
-    def test_next_partial_after_4gray_falls_back_to_fast_full(self):
-        drv, mock_epd = _make_epd_driver(last_buf=None, mode="4gray")
-        drv.display_partial(Image.new("1", (WIDTH, HEIGHT), 255))
-        mock_epd.init_fast.assert_called_once()
-        mock_epd.display.assert_called_once()
-
 
 class TestNullDriverSleep:
     def test_sleep_sets_flag(self, tmp_path):
