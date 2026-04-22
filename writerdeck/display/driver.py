@@ -41,9 +41,8 @@ class EPaperDriver:
     def init(self) -> None:
         from waveshare_epd import epd7in5_V2  # type: ignore[import-untyped]
         self._epd = epd7in5_V2.EPD()
-        self._epd.init()
-        self._epd.Clear()
-        self._mode = "full"
+        self._epd.init_fast()
+        self._mode = "fast"
         self._last_buf = None
         logger.info("EPaperDriver initialized (%dx%d)", WIDTH, HEIGHT)
 
@@ -54,7 +53,7 @@ class EPaperDriver:
             self._epd.init_fast()
             self._mode = "fast"
         buf = self._epd.getbuffer(image)
-        self._epd.display(buf)
+        self._epd.display(buf, self._last_buf)
         self._last_buf = buf
 
     def display_clean(self, image: Image.Image) -> None:
@@ -98,7 +97,7 @@ class EPaperDriver:
                 if self._mode != "fast":
                     self._epd.init_fast()
                     self._mode = "fast"
-                self._epd.display(buf)
+                self._epd.display(buf, self._last_buf)
                 self._last_buf = buf
             else:
                 if self._mode != "part":
@@ -121,7 +120,7 @@ class EPaperDriver:
             if self._mode != "fast":
                 self._epd.init_fast()
                 self._mode = "fast"
-            self._epd.display(buf)
+            self._epd.display(buf, self._last_buf)
             self._last_buf = buf
 
     def wake(self) -> None:
@@ -133,8 +132,8 @@ class EPaperDriver:
         controller RAM (DTM1/DTM2) is reset by the hardware init sequence.
         """
         assert self._epd is not None
-        self._epd.init()
-        self._mode = "full"
+        self._epd.init_fast()
+        self._mode = "fast"
         # _last_buf is intentionally preserved: the physical screen still shows
         # what it was showing before sleep, so the diff reference remains valid.
         logger.info("EPaperDriver woken from sleep (no clear)")

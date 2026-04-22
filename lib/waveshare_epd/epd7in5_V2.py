@@ -293,8 +293,14 @@ class EPD:
                         buf[int((newx + (newy * self.width))/4)] = ((pixels[x, y-3]&0xc0) | (pixels[x, y-2]&0xc0)>>2 | (pixels[x, y-1]&0xc0)>>4 | (pixels[x, y]&0xc0)>>6) 
         return buf
 
-    def display(self, image):
-        image1 = bytes(b ^ 0xFF for b in image)
+    def display(self, image, prev_image=None):
+        # DTM1 (0x10) = "old" frame. When prev_image is supplied it carries the
+        # actual previous display state so only changed pixels are driven — the
+        # A2 fast waveform skips unchanged W→W and B→B pixels entirely, reducing
+        # flash to only the areas that actually changed.  When prev_image is None
+        # (first frame, after deep clean) fall back to the inverted image so every
+        # pixel is forced through a full B→W or W→B drive cycle.
+        image1 = prev_image if prev_image is not None else bytes(b ^ 0xFF for b in image)
         self.send_command(0x10)
         self.send_data2(image1)
 

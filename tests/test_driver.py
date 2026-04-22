@@ -184,15 +184,15 @@ class TestEPaperDriverBoundingBoxPartial:
         drv.wake()
         mock_epd.Clear.assert_not_called()
 
-    def test_wake_calls_epd_init(self):
+    def test_wake_calls_epd_init_fast(self):
         drv, mock_epd = _make_epd_driver(mode=None)
         drv.wake()
-        mock_epd.init.assert_called_once()
+        mock_epd.init_fast.assert_called_once()
 
-    def test_wake_sets_mode_to_full(self):
+    def test_wake_sets_mode_to_fast(self):
         drv, mock_epd = _make_epd_driver(mode=None)
         drv.wake()
-        assert drv._mode == "full"
+        assert drv._mode == "fast"
 
     def test_wake_preserves_last_buf(self):
         last = _white_buf()
