@@ -49,3 +49,19 @@ class TestDrainRate:
         bar = p.battery_bar(5)
         assert "60%" in bar
         assert "\u25a0" in bar
+
+    def test_battery_bar_charging(self):
+        p = Power(enabled=False)
+        p.battery_level = 80
+        p.is_charging = True
+        bar = p.battery_bar(5)
+        assert "80%+" in bar
+
+    def test_available_false_by_default(self):
+        p = Power(enabled=False)
+        assert p.available is False
+
+    def test_available_true_after_update(self):
+        p = Power(enabled=False)
+        p._available = True
+        assert p.available is True

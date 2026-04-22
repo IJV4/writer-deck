@@ -375,7 +375,7 @@ class App:
             frame.status_message = msg
 
         # Inject battery info for dashboard or when low
-        if self._config.enable_battery_monitor and frame.stats is not None:
+        if self._config.enable_battery_monitor and self._power.available and frame.stats is not None:
             if self._mode.name == "dashboard":
                 frame.stats["Battery"] = self._power.battery_bar()
                 # Add time estimate if available

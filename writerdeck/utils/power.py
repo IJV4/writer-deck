@@ -50,9 +50,14 @@ class Power:
     def stop(self) -> None:
         self._running = False
 
+    @property
+    def available(self) -> bool:
+        return self._available
+
     def battery_bar(self, width: int = 5) -> str:
         filled = int(self.battery_level / 100 * width)
-        return "[" + "\u25a0" * filled + "\u25a1" * (width - filled) + f"] {self.battery_level}%"
+        suffix = "+" if self.is_charging else ""
+        return "[" + "\u25a0" * filled + "\u25a1" * (width - filled) + f"] {self.battery_level}%{suffix}"
 
     @property
     def drain_rate_pct_per_hour(self) -> float | None:
