@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PI_HOST="${1:-writerdeck.local}"
+PI_HOST="${1:-writer-deck.local}"
 PI_USER="${2:-pi}"
 REMOTE_DIR="~/writer-deck"
 

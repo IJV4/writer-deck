@@ -13,10 +13,19 @@ sudo apt-get update -qq
 sudo apt-get install -y -qq \
     python3-dev python3-venv python3-pip \
     libfreetype6-dev libjpeg-dev libopenjp2-7-dev \
-    libgpiod-dev fonts-hack-ttf git evtest
+    libgpiod-dev fonts-hack-ttf git evtest \
+    avahi-daemon libnss-mdns
 
-# 2. Enable SPI + I2C, disable Bluetooth
-echo "[2/10] Configuring boot options..."
+# 2. Set hostname for mDNS discovery
+echo "[2/11] Configuring hostname (writer-deck.local)..."
+sudo hostnamectl set-hostname writer-deck
+if ! grep -q "127.0.1.1.*writer-deck" /etc/hosts 2>/dev/null; then
+    sudo sed -i 's/127.0.1.1.*/127.0.1.1\twriter-deck/' /etc/hosts
+fi
+sudo systemctl enable --now avahi-daemon
+
+# 3. Enable SPI + I2C, disable Bluetooth
+echo "[3/11] Configuring boot options..."
 BOOT_CONFIG="/boot/config.txt"
 [ -f "/boot/firmware/config.txt" ] && BOOT_CONFIG="/boot/firmware/config.txt"
 
@@ -27,14 +36,14 @@ sudo grep -q "^dtparam=i2c_arm=on" "$BOOT_CONFIG" 2>/dev/null || \
 sudo grep -q "^dtoverlay=disable-bt" "$BOOT_CONFIG" 2>/dev/null || \
     echo "dtoverlay=disable-bt" | sudo tee -a "$BOOT_CONFIG" > /dev/null
 
-# 3. Disable HDMI to save power
-echo "[3/10] Disabling HDMI output..."
+# 4. Disable HDMI to save power
+echo "[4/11] Disabling HDMI output..."
 if ! grep -q "tvservice -o" /etc/rc.local 2>/dev/null; then
     sudo sed -i 's|^exit 0|/usr/bin/tvservice -o\nexit 0|' /etc/rc.local 2>/dev/null || true
 fi
 
-# 4. Install lgpio (required on Bookworm)
-echo "[4/10] Installing lgpio..."
+# 5. Install lgpio (required on Bookworm)
+echo "[5/11] Installing lgpio..."
 if ! python3 -c "import lgpio" 2>/dev/null; then
     cd /tmp
     wget -q https://github.com/joan2937/lg/archive/master.zip -O lg-master.zip
@@ -45,19 +54,19 @@ if ! python3 -c "import lgpio" 2>/dev/null; then
     cd "$SCRIPT_DIR"
 fi
 
-# 5. Install PiSugar daemon
-echo "[5/10] Installing PiSugar power manager..."
+# 6. Install PiSugar daemon
+echo "[6/11] Installing PiSugar power manager..."
 if ! systemctl is-active --quiet pisugar-server 2>/dev/null; then
     curl -sL http://cdn.pisugar.com/release/pisugar-power-manager.sh | sudo bash || \
         echo "  Warning: PiSugar install failed (OK if no PiSugar hardware)"
 fi
 
-# 6. User groups
-echo "[6/10] Adding user to hardware groups..."
+# 7. User groups
+echo "[7/11] Adding user to hardware groups..."
 sudo usermod -aG input,spi,gpio,i2c "$USER" 2>/dev/null || true
 
-# 7. Waveshare e-Paper driver (vendored in lib/waveshare_epd/ — no download needed)
-echo "[7/10] Verifying Waveshare e-Paper driver..."
+# 8. Waveshare e-Paper driver (vendored in lib/waveshare_epd/ — no download needed)
+echo "[8/11] Verifying Waveshare e-Paper driver..."
 LIB_DIR="$SCRIPT_DIR/lib/waveshare_epd"
 if [ ! -f "$LIB_DIR/epd7in5_V2.py" ]; then
     echo "  ERROR: $LIB_DIR/epd7in5_V2.py not found."
@@ -66,20 +75,20 @@ if [ ! -f "$LIB_DIR/epd7in5_V2.py" ]; then
     exit 1
 fi
 
-# 8. Python venv + dependencies
-echo "[8/10] Creating venv and installing Python packages..."
+# 9. Python venv + dependencies
+echo "[9/11] Creating venv and installing Python packages..."
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade pip -q
 "$VENV_DIR/bin/pip" install -r "$SCRIPT_DIR/requirements.txt" -q
 "$VENV_DIR/bin/pip" install evdev spidev gpiozero lgpio -q
 
-# 9. Create directories
-echo "[9/10] Creating data directories..."
+# 10. Create directories
+echo "[10/11] Creating data directories..."
 mkdir -p ~/Documents/writer-deck
 mkdir -p ~/.config/writer-deck
 
-# 10. Install systemd service
-echo "[10/10] Installing systemd service..."
+# 11. Install systemd service
+echo "[11/11] Installing systemd service..."
 sudo tee /etc/systemd/system/writer-deck.service > /dev/null <<EOF
 [Unit]
 Description=Writer Deck Application

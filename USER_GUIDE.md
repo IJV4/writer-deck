@@ -304,15 +304,16 @@ sleep_tiers:
 
 The one-shot setup script handles:
 
-1. System packages (python3-dev, fonts-hack-ttf, image libs, evtest)
-2. SPI and I2C enabled in boot config
-3. Bluetooth disabled, HDMI disabled (power savings)
-4. lgpio compiled and installed (Bookworm requirement)
-5. PiSugar daemon installed
-6. Waveshare e-Paper driver vendored to `lib/waveshare_epd/`
-7. Python venv created with dependencies (evdev, spidev, gpiozero, lgpio)
-8. Data directories created
-9. Systemd service generated and enabled with the correct user and paths
+1. System packages (python3-dev, fonts-hack-ttf, image libs, evtest, avahi-daemon)
+2. Hostname set to `writer-deck` + Avahi enabled (advertises `writer-deck.local` on the LAN)
+3. SPI and I2C enabled in boot config
+4. Bluetooth disabled, HDMI disabled (power savings)
+5. lgpio compiled and installed (Bookworm requirement)
+6. PiSugar daemon installed
+7. Waveshare e-Paper driver vendored to `lib/waveshare_epd/`
+8. Python venv created with dependencies (evdev, spidev, gpiozero, lgpio)
+9. Data directories created
+10. Systemd service generated and enabled with the correct user and paths
 
 ### Systemd Service
 
@@ -378,10 +379,16 @@ ssh-copy-id pi@<PI_IP>
 ### Deploy to Pi
 
 ```bash
-./deploy.sh                         # Defaults to pi@writerdeck.local
-./deploy.sh 192.168.1.50            # Custom host
+./deploy.sh                         # Defaults to pi@writer-deck.local
+./deploy.sh 192.168.1.50            # Custom host (IP)
 ./deploy.sh 192.168.1.50 myuser     # Custom host and user
 ```
+
+> **WSL users:** WSL does not resolve `.local` mDNS by default. Either install
+> `avahi-daemon libnss-mdns` on WSL, or add a static entry to `/etc/hosts`:
+> ```
+> 192.168.1.101  writer-deck.local
+> ```
 
 The script rsyncs only the files needed to run the app (excludes `venv`, `tests/`, `config.yaml`, dev tools, and docs). If the systemd service is already installed it restarts automatically; otherwise it prints a reminder to run `setup.sh` first.
 
