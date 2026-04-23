@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
@@ -34,12 +35,16 @@ class BaseMode(ABC):
 
     def __init__(self) -> None:
         self._scroll_offset: int = 0
+        self._current_page: int = 0
+        self._page_manual: bool = False
         # Set by render() so handle_input() can do visual-row Up/Down navigation.
         self._wrapped_lines: list[str] = []
         self._row_map: list[tuple[int, int]] = []  # [(doc_line_idx, char_start), ...]
 
     def on_enter(self) -> None:
         self._scroll_offset = 0
+        self._current_page = 0
+        self._page_manual = False
 
     def on_exit(self) -> None:
         pass
@@ -53,6 +58,37 @@ class BaseMode(ABC):
     def render(self, doc: Document, session: Session) -> RenderFrame:
         """Produce a RenderFrame for the current document state."""
         ...
+
+    # -- Pagination --------------------------------------------------------
+
+    def _paginate(
+        self,
+        wrapped: list[str],
+        cursor_visual_row: int,
+        visible_lines: int,
+    ) -> tuple[int, int, list[str], int, bool]:
+        """Compute page-based viewport.
+
+        Returns (page, total_pages, visible_slice, adj_cursor_line, show_cursor).
+        Tracks self._current_page and self._page_manual:
+        - Editing actions reset _page_manual=False so the cursor is followed.
+        - PAGE_PREV/PAGE_NEXT set _page_manual=True so the viewport stays put.
+        """
+        total = max(1, math.ceil(len(wrapped) / visible_lines))
+        cursor_page = cursor_visual_row // visible_lines
+
+        if self._page_manual and self._current_page != cursor_page:
+            page = max(0, min(self._current_page, total - 1))
+        else:
+            page = cursor_page
+            self._current_page = page
+            self._page_manual = False
+
+        visible = wrapped[page * visible_lines : (page + 1) * visible_lines]
+        adj_cursor = cursor_visual_row - page * visible_lines
+        show_cursor = 0 <= adj_cursor < len(visible)
+
+        return page, total, visible, adj_cursor, show_cursor
 
     # -- Visual row navigation ---------------------------------------------
 

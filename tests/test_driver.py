@@ -307,3 +307,35 @@ class TestCreateDriver:
         with patch.object(EPaperDriver, "init", side_effect=RuntimeError("no hardware")):
             drv = create_driver(use_null=False)
         assert isinstance(drv, NullDriver)
+
+
+class TestEPaperDriverGhostPrevention:
+    """display_full and escalation must NOT pass prev_image to epd.display().
+
+    Passing _last_buf as DTM1 makes the A2 waveform skip driving unchanged
+    pixels — ghost from prior partials accumulates on rows the user isn't
+    actively editing (typically the top of the screen).
+    """
+
+    def test_display_full_does_not_pass_prev_image(self):
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        drv.display_full(Image.new("1", (WIDTH, HEIGHT), 255))
+        args, kwargs = mock_epd.display.call_args
+        assert len(args) == 1, "display() must be called with one positional arg (no prev_image)"
+        assert "prev_image" not in kwargs
+
+    def test_partial_escalation_does_not_pass_prev_image(self):
+        # >30% changed rows → escalates to fast full; must not pass prev_image.
+        rows = list(range(0, 200))
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        drv.display_partial(_image_with_black_rows(rows))
+        args, kwargs = mock_epd.display.call_args
+        assert len(args) == 1, "escalated display() must be called with one positional arg"
+        assert "prev_image" not in kwargs
+
+    def test_no_last_buf_fallback_does_not_pass_prev_image(self):
+        drv, mock_epd = _make_epd_driver(last_buf=None, mode="fast")
+        drv.display_partial(Image.new("1", (WIDTH, HEIGHT), 0))
+        args, kwargs = mock_epd.display.call_args
+        assert len(args) == 1
+        assert "prev_image" not in kwargs

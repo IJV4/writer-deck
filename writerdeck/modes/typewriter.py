@@ -39,6 +39,7 @@ class TypewriterMode(BaseMode):
         line_height = self._font_size + 4
         visible_lines = (HEIGHT - 32) // line_height
         focus_line = int(visible_lines * _FOCUS_RATIO)
+        page, total, _, _, _ = self._paginate(wrapped, cursor_line, visible_lines)
 
         # Apply manual scroll offset if page up/down was used
         if self._scroll_offset > 0:
@@ -68,7 +69,7 @@ class TypewriterMode(BaseMode):
             and doc.cursor_line == len(doc.lines) - 1
         )
 
-        stats = {"Words": str(doc.word_count)}
+        stats = {"Words": str(doc.word_count), "Page": f"{page + 1}/{total}"}
 
         selection = (
             map_selection(doc.selection.ordered(), row_map, start)

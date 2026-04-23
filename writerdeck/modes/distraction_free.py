@@ -6,6 +6,7 @@ from writerdeck.core.document import Document
 from writerdeck.core.session import Session
 from writerdeck.input.keymapper import KeyAction
 from writerdeck.modes.base_mode import BaseMode, RenderFrame
+from writerdeck.display.driver import HEIGHT
 from writerdeck.utils.text_wrapper import map_selection, wrap_lines
 
 
@@ -19,6 +20,15 @@ class DistractionFreeMode(BaseMode):
         self._font_size = font_size
 
     def handle_input(self, action: KeyAction, char: str, doc: Document) -> bool:
+        if action == KeyAction.PAGE_PREV:
+            self._current_page = max(0, self._current_page - 1)
+            self._page_manual = True
+            return True
+        if action == KeyAction.PAGE_NEXT:
+            self._current_page += 1
+            self._page_manual = True
+            return True
+        self._page_manual = False
         result = self._handle_visual_updown(action, char, doc)
         if result is not None:
             return result
@@ -32,20 +42,15 @@ class DistractionFreeMode(BaseMode):
         self._wrapped_lines = wrapped
         self._row_map = row_map
 
-        # Apply scroll offset for page up/down
-        visible = wrapped
-        show_cursor = True
-        adj_cursor = cursor_line
-        if self._scroll_offset > 0:
-            visible = wrapped[self._scroll_offset:]
-            adj_cursor = cursor_line - self._scroll_offset
-            if adj_cursor < 0 or adj_cursor >= len(visible):
-                show_cursor = False
+        line_height = self._font_size + 4
+        visible_lines = (HEIGHT - 8 - 24) // line_height
+        page, total, visible, adj_cursor, show_cursor = self._paginate(wrapped, cursor_line, visible_lines)
+        scroll = page * visible_lines
 
-        stats = {"Words": str(doc.word_count)}
+        stats = {"Words": str(doc.word_count), "Page": f"{page + 1}/{total}"}
 
         selection = (
-            map_selection(doc.selection.ordered(), row_map, self._scroll_offset)
+            map_selection(doc.selection.ordered(), row_map, scroll)
             if doc.selection is not None else None
         )
 

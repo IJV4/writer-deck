@@ -36,6 +36,10 @@ class KeyAction(Enum):
     PAGE_UP = auto()             # scancode 104
     PAGE_DOWN = auto()           # scancode 109
 
+    # Pagination: Ctrl+Up / Ctrl+Down
+    PAGE_PREV = auto()           # Ctrl+Up
+    PAGE_NEXT = auto()           # Ctrl+Down
+
     # Phase 3: Selection
     SELECT_LEFT = auto()         # Shift+Left
     SELECT_RIGHT = auto()        # Shift+Right
@@ -175,6 +179,10 @@ class KeyMapper:
                 return KeyAction.WORD_LEFT, ""
             if scancode == _KEY_RIGHT:
                 return KeyAction.WORD_RIGHT, ""
+            if scancode == _KEY_UP:
+                return KeyAction.PAGE_PREV, ""
+            if scancode == _KEY_DOWN:
+                return KeyAction.PAGE_NEXT, ""
             if scancode == _KEY_BACKSPACE:
                 return KeyAction.DELETE_WORD_BACK, ""
             if scancode == _KEY_A:

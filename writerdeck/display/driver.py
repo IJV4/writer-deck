@@ -53,7 +53,7 @@ class EPaperDriver:
             self._epd.init_fast()
             self._mode = "fast"
         buf = self._epd.getbuffer(image)
-        self._epd.display(buf, self._last_buf)
+        self._epd.display(buf)
         self._last_buf = buf
 
     def display_clean(self, image: Image.Image) -> None:
@@ -97,7 +97,7 @@ class EPaperDriver:
                 if self._mode != "fast":
                     self._epd.init_fast()
                     self._mode = "fast"
-                self._epd.display(buf, self._last_buf)
+                self._epd.display(buf)
                 self._last_buf = buf
             else:
                 if self._mode != "part":
@@ -120,7 +120,7 @@ class EPaperDriver:
             if self._mode != "fast":
                 self._epd.init_fast()
                 self._mode = "fast"
-            self._epd.display(buf, self._last_buf)
+            self._epd.display(buf)
             self._last_buf = buf
 
     def wake(self) -> None:
