@@ -71,6 +71,13 @@ class TestValidation:
         warnings = _validate(data)
         assert warnings == []
 
+    def test_new_panel_safety_keys_valid(self):
+        data = {
+            "display_idle_sleep_seconds": 20,
+            "full_refresh_max_seconds": 300,
+        }
+        assert _validate(data) == []
+
     def test_boundary_values(self):
         data = {"font_size": 6}  # min boundary
         assert _validate(data) == []
@@ -192,8 +199,24 @@ class TestConfigProperties:
     def test_idle_full_refresh_seconds(self):
         assert self._config().idle_full_refresh_seconds == 10
 
+    def test_full_refresh_max_seconds_default(self):
+        c = Config({"display_model": "x"})
+        assert c.full_refresh_max_seconds == 300
+
+    def test_full_refresh_max_seconds_override(self):
+        c = self._config(full_refresh_max_seconds=120)
+        assert c.full_refresh_max_seconds == 120
+
     def test_display_sleep_minutes(self):
         assert self._config().display_sleep_minutes == 5
+
+    def test_display_idle_sleep_seconds_default(self):
+        c = Config({"display_model": "x"})
+        assert c.display_idle_sleep_seconds == 20
+
+    def test_display_idle_sleep_seconds_override(self):
+        c = self._config(display_idle_sleep_seconds=45)
+        assert c.display_idle_sleep_seconds == 45
 
     def test_keyboard_device(self):
         assert self._config().keyboard_device == "auto"

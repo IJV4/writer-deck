@@ -228,3 +228,145 @@ class TestLedgerPersistence:
         # After persist, _start_word_count should be updated
         assert s._start_word_count == 10
         assert s.words_written(10) == 0
+
+
+class TestDeleteBelowBaseline:
+    """BUG-4: words re-typed after dipping below the baseline are counted."""
+
+    def test_words_written_counts_retyped_after_dip(self):
+        s = Session(daily_goal=500)
+        s.start(100)  # baseline 100
+        assert s.words_written(50) == 0  # deleted below baseline -> ratchets to 50
+        # Re-type up to 130: authored 130-50 = 80 words, not 130-100 = 30.
+        assert s.words_written(130) == 80
+
+    def test_baseline_ratchets_down_on_dip(self):
+        s = Session()
+        s.start(100)
+        s.words_written(50)  # observation ratchets baseline to 50
+        assert s._start_word_count == 50
+
+    def test_ledger_reflects_authored_words_after_dip(self, tmp_path):
+        ledger_path = tmp_path / "daily.json"
+        s = Session(daily_goal=500)
+        s._ledger_path = ledger_path
+        s.start(100)  # baseline 100
+        s.words_written(50)  # dip below baseline (edit-and-delete)
+        s.persist(130)  # re-typed up to 130
+
+        data = json.loads(ledger_path.read_text())
+        key = str(date.today())
+        # 80 words actually authored (50 -> 130), not 30 (130 - 100).
+        assert data[key] == 80
+
+    def test_persist_advances_baseline_even_when_delta_nonpositive(self, tmp_path):
+        ledger_path = tmp_path / "daily.json"
+        s = Session()
+        s._ledger_path = ledger_path
+        s.start(100)
+        s.persist(60)  # delta <= 0 after ratchet -> no ledger write
+        assert not ledger_path.exists()
+        # Baseline must be advanced to 60, not left stale at 100, so later
+        # words are not swallowed.
+        assert s._start_word_count == 60
+        s.persist(90)  # +30 authored from the new baseline
+        data = json.loads(ledger_path.read_text())
+        assert data[str(date.today())] == 30
+
+
+class _FakeDate:
+    """Helper to drive date.today() across a midnight boundary in tests."""
+
+    def __init__(self, sequence):
+        self._sequence = list(sequence)
+        self._idx = 0
+
+    def today(self):
+        d = self._sequence[min(self._idx, len(self._sequence) - 1)]
+        self._idx += 1
+        return d
+
+
+class TestMidnightAttribution:
+    """BUG-5: words are attributed to the day they were written."""
+
+    def test_words_attributed_to_start_day_after_rollover(self, tmp_path):
+        from datetime import date as real_date
+
+        ledger_path = tmp_path / "daily.json"
+        day1 = real_date(2026, 7, 10)
+        day2 = real_date(2026, 7, 11)
+
+        s = Session(daily_goal=500)
+        s._ledger_path = ledger_path
+        # Session starts on day1.
+        with patch("writerdeck.core.session.date", _FakeDate([day1])):
+            s.start(0)
+        assert s._baseline_date == day1
+
+        # Persist happens after midnight (now day2), but words were written
+        # on day1 and must be credited to day1.
+        with patch("writerdeck.core.session.date", _FakeDate([day2, day2])):
+            s.persist(40)
+
+        data = json.loads(ledger_path.read_text())
+        assert data[str(day1)] == 40
+        assert str(day2) not in data
+        # Baseline date rolls forward to day2 for the next window.
+        assert s._baseline_date == day2
+
+    def test_goal_progress_does_not_double_count_across_midnight(self, tmp_path):
+        from datetime import date as real_date
+
+        ledger_path = tmp_path / "daily.json"
+        day1 = real_date(2026, 7, 10)
+        day2 = real_date(2026, 7, 11)
+
+        s = Session(daily_goal=100)
+        s._ledger_path = ledger_path
+        with patch("writerdeck.core.session.date", _FakeDate([day1])):
+            s.start(0)
+
+        # Credit 40 words to day1.
+        with patch("writerdeck.core.session.date", _FakeDate([day1, day1])):
+            s.persist(40)
+
+        # Now on day2 with a fresh 30-word delta. goal_progress must reflect
+        # day2's ledger (0 so far) + the pending 30 = 0.3, NOT day1's 40 mixed
+        # in as well.
+        with patch("writerdeck.core.session.date", _FakeDate([day2, day2, day2])):
+            progress = s.goal_progress(70)  # baseline is 40 -> delta 30
+        assert abs(progress - 0.3) < 0.01
+
+    def test_rollover_detected_by_goal_progress(self, tmp_path):
+        from datetime import date as real_date
+
+        ledger_path = tmp_path / "daily.json"
+        day1 = real_date(2026, 7, 10)
+        day2 = real_date(2026, 7, 11)
+
+        s = Session(daily_goal=500)
+        s._ledger_path = ledger_path
+        with patch("writerdeck.core.session.date", _FakeDate([day1])):
+            s.start(0)
+        # 20 words written and persisted on day1 (e.g. an autosave tick).
+        with patch("writerdeck.core.session.date", _FakeDate([day1, day1])):
+            s.persist(20)
+        data = json.loads(ledger_path.read_text())
+        assert data[str(day1)] == 20
+
+        # Clock rolls to day2 with no further typing yet (current count still
+        # 20). The first observation flushes the pending window to day1 (0 new
+        # words) and opens a day2 window. goal_progress reflects day2's ledger
+        # (0), NOT day1's 20 -> no double-count.
+        with patch("writerdeck.core.session.date", _FakeDate([day2, day2, day2])):
+            progress = s.goal_progress(20)
+        data = json.loads(ledger_path.read_text())
+        assert data[str(day1)] == 20  # day1 total unchanged
+        assert str(day2) not in data  # nothing written on day2 yet
+        assert progress == 0.0  # day2 progress excludes day1's total
+
+        # Now type 10 words on day2; they credit toward day2's goal only.
+        with patch("writerdeck.core.session.date", _FakeDate([day2, day2, day2])):
+            progress = s.goal_progress(30)
+        assert progress == 10 / 500

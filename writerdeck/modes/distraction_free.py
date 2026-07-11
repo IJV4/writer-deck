@@ -41,6 +41,7 @@ class DistractionFreeMode(BaseMode):
         )
         self._wrapped_lines = wrapped
         self._row_map = row_map
+        self._wrapped_len = len(wrapped)
 
         line_height = self._font_size + 4
         visible_lines = (HEIGHT - 8 - 24) // line_height

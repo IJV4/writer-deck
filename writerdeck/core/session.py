@@ -15,6 +15,11 @@ class Session:
         self.daily_goal = daily_goal
         self._start_time = time.monotonic()
         self._start_word_count = 0
+        # BUG-5: attribute words to the day the session's word-count baseline
+        # was captured, not to date.today() at persist time. Otherwise a
+        # session left open across midnight credits pre-midnight words to the
+        # new day. The baseline date rolls forward on each persist (see below).
+        self._baseline_date = date.today()
         self._ledger_path = (
             Path("~/.config/writer-deck/daily.json").expanduser()
         )
@@ -22,6 +27,7 @@ class Session:
     def start(self, current_word_count: int) -> None:
         self._start_time = time.monotonic()
         self._start_word_count = current_word_count
+        self._baseline_date = date.today()
 
     @property
     def elapsed_seconds(self) -> float:
@@ -36,10 +42,34 @@ class Session:
             return f"{hours}h {minutes:02d}m"
         return f"{minutes}m {secs:02d}s"
 
+    def _roll_over_if_needed(self, current_word_count: int) -> None:
+        # BUG-5: when the wall clock advances past the day the current window
+        # opened on, carry the window forward to today. We deliberately do NOT
+        # credit the pending delta to the old day here: an implicit read (a
+        # render/goal_progress tick) after midnight is dominated by words being
+        # typed *now*, so they belong to today. Only an explicit persist() (an
+        # autosave/save) credits the pending delta to the window's day. This is
+        # the "persist on rollover" model from the plan, applied at the seam
+        # where it's unambiguous. Net effect: goal_progress()/_today_total()
+        # always reflect the current wall-clock day, never mixing yesterday's
+        # ledger total with today's typing.
+        today = date.today()
+        if today != self._baseline_date:
+            self._baseline_date = today
+
     def words_written(self, current_word_count: int) -> int:
-        return max(0, current_word_count - self._start_word_count)
+        # BUG-4: count against a baseline that ratchets *down* to the lowest
+        # word count seen since the last start()/persist(). If the user deletes
+        # below the baseline (e.g. 100 -> 50) and then re-types (50 -> 130), the
+        # re-typed words are counted (130 - 50 = 80), rather than being lost by
+        # a naive max(0, current - 100) = 30. The baseline only moves down here;
+        # persist() advances it up to the current count after crediting words.
+        if current_word_count < self._start_word_count:
+            self._start_word_count = current_word_count
+        return current_word_count - self._start_word_count
 
     def goal_progress(self, current_word_count: int) -> float:
+        self._roll_over_if_needed(current_word_count)
         today_words = self._today_total() + self.words_written(current_word_count)
         if self.daily_goal <= 0:
             return 1.0
@@ -48,7 +78,7 @@ class Session:
     def goal_bar(self, current_word_count: int, width: int = 10) -> str:
         pct = self.goal_progress(current_word_count)
         filled = int(pct * width)
-        return "[" + "\u25a0" * filled + "\u25a1" * (width - filled) + "]"
+        return "[" + "■" * filled + "□" * (width - filled) + "]"
 
     # -- Daily ledger persistence ------------------------------------------
 
@@ -86,15 +116,31 @@ class Session:
             raise
 
     def _today_total(self) -> int:
+        # BUG-5: read against the session's baseline date (which tracks the day
+        # the current uncredited delta belongs to), not date.today(). This keeps
+        # goal_progress()'s "today total + pending delta" arithmetic on a single
+        # consistent day even when the wall clock has rolled past midnight.
         ledger = self._load_ledger()
-        return ledger.get(str(date.today()), 0)
+        return ledger.get(str(self._baseline_date), 0)
+
+    def _flush(self, current_word_count: int, day: date) -> None:
+        # Credit words authored in the current window to `day`, then advance the
+        # up-baseline to the current count. BUG-4: advance the baseline even
+        # when the delta is <= 0, so a dip that reset the baseline downward does
+        # not leave a stale high baseline that would swallow later words.
+        words = self.words_written(current_word_count)
+        if words > 0:
+            ledger = self._load_ledger()
+            key = str(day)
+            ledger[key] = ledger.get(key, 0) + words
+            self._save_ledger(ledger)
+        self._start_word_count = current_word_count
 
     def persist(self, current_word_count: int) -> None:
-        words = self.words_written(current_word_count)
-        if words <= 0:
-            return
-        ledger = self._load_ledger()
-        key = str(date.today())
-        ledger[key] = ledger.get(key, 0) + words
-        self._save_ledger(ledger)
-        self._start_word_count = current_word_count
+        # BUG-5: an explicit persist credits the pending delta to the day the
+        # current window opened on (_baseline_date). If a session opened before
+        # midnight and the first save lands after midnight, the pre-midnight
+        # words are still credited to the pre-midnight day. After crediting,
+        # open a fresh window dated today so the next batch lands correctly.
+        self._flush(current_word_count, self._baseline_date)
+        self._baseline_date = date.today()

@@ -22,7 +22,7 @@ The Pi runs headlessly as a systemd service. The e-ink display retains its image
 ## Features
 
 - **Three writing modes** — Distraction-Free, Dashboard (with stats sidebar), and Typewriter (auto-scrolling)
-- **Optimized e-ink refresh** — bounding-box partial refresh (~0.3s per keystroke), automatic escalation to fast-full for large changes, 4-gray grayscale anti-aliasing
+- **Optimized e-ink refresh** — bounding-box partial refresh (~0.3s per keystroke), automatic escalation to fast-full for large changes
 - **Smart sleep** — display sleeps after idle, wakes without a white flash (e-ink retains image)
 - **Progressive power saving** — display off → CPU powersave → system suspend, all reversed on keypress
 - **Document management** — autosave, atomic writes, crash recovery, file picker overlay
@@ -104,7 +104,6 @@ Key options:
 
 ```yaml
 # Display quality
-use_4gray: true                     # Anti-aliased text (screens bought after Oct 2023)
 idle_deep_clean_seconds: 300        # GC16 ghost-clear after 5 min idle (0 = disabled)
 partial_refresh_max_streak: 20      # Partial refreshes before a forced full
 
@@ -130,10 +129,42 @@ Writer Deck uses four e-ink waveform modes, selected automatically:
 |------|-------|------|
 | Bounding-box partial | ~0.3s | Per-keystroke (< 30% of rows changed) |
 | Fast-full | ~1s | Large changes or periodic full refresh |
-| 4-gray grayscale | ~1.5s | Full refresh when `use_4gray: true` |
 | GC16 deep clean | ~3-4s | After long idle (ghost removal) |
 
 This keeps the display smooth during active typing while running a proper ghost-clearing cycle when you step away.
+
+---
+
+## Hardware Watchdog
+
+Two independent watchdogs protect against hangs:
+
+- **App-level (systemd `WatchdogSec`)** — the app pings systemd via `sd_notify`; if the
+  event loop stalls, systemd restarts the service.
+- **Kernel-level (bcm2835 SoC watchdog)** — catches a full *kernel* freeze that the
+  app-level watchdog can't. `setup.sh` enables it via `dtparam=watchdog=on` in the boot
+  config and `RuntimeWatchdogSec=14` in `/etc/systemd/system.conf` (the bcm2835 max
+  timeout is ~15s). If the whole system hangs, the SoC forces a reboot; boot-time
+  `init()` + `Clear()` then restores a clean panel instead of leaving it powered-and-frozen.
+
+Both are configured automatically by `setup.sh`. After running setup **and rebooting**,
+verify the hardware watchdog is active:
+
+```bash
+wdctl
+```
+
+Expected output shows the Broadcom device active with a ~15s timeout, e.g.:
+
+```
+Device:        /dev/watchdog0
+Identity:      Broadcom BCM2835 Watchdog timer [version 0]
+Timeout:       14 seconds
+```
+
+If `wdctl` reports no device (or `Timeout: 0`), confirm `dtparam=watchdog=on` is present
+in `/boot/firmware/config.txt` (or `/boot/config.txt` on older images) and
+`RuntimeWatchdogSec=14` in `/etc/systemd/system.conf`, then reboot.
 
 ---
 
@@ -147,10 +178,48 @@ mypy writerdeck/            # type check
 ruff check .                # lint
 ruff format .               # format
 
-./deploy.sh 192.168.1.21    # deploy to Pi over SSH
+./deploy.sh 192.168.1.21    # deploy to Pi over SSH (atomic release + swap)
 ```
 
 Tests run entirely on desktop — no Pi hardware required.
+
+---
+
+## Deploy & Rollback
+
+Deploys are **atomic and revertible** (OPS-1). `deploy.sh` never mutates the live
+tree in place. Instead it uses a release layout on the Pi:
+
+```
+~/writer-deck/
+├── releases/<timestamp>/     # each deploy lands in a fresh dir (code + venv symlink)
+├── venv/                     # ONE shared virtualenv (survives rollbacks)
+└── current -> releases/<ts>  # active release; systemd points here
+```
+
+The systemd unit's `WorkingDirectory`/`ExecStart`/`ExecStopPost` point at the
+`current` symlink, so switching code is a single atomic symlink swap + restart.
+
+```bash
+# Deploy: rsync into releases/<ts>/, swap `current`, restart, prune old releases.
+./deploy.sh [PI_HOST] [PI_USER]        # defaults: writerdeck.local pi
+
+# List releases and the active one:
+./deploy.sh --list [PI_HOST] [PI_USER]
+
+# Roll back to the previous release (repoint `current` + restart):
+./deploy.sh --rollback [PI_HOST] [PI_USER]
+```
+
+A mid-deploy failure leaves the old `current` untouched (the new code is still in
+a half-written `releases/<ts>/` and is simply never activated). The last **5**
+releases are kept for rollback; older ones are pruned conservatively (only dirs
+under `releases/`, never the active release, never data dirs). Data
+(`config.yaml`, `~/Documents/writer-deck`, `~/.config/writer-deck`) lives outside
+the release tree and is never copied or deleted.
+
+> **Manual rollback** (if you can't run `deploy.sh`): on the Pi,
+> `ln -sfn ~/writer-deck/releases/<older-ts> ~/writer-deck/current.tmp && mv -Tf ~/writer-deck/current.tmp ~/writer-deck/current && sudo systemctl restart writer-deck`.
 
 ---
 
@@ -160,8 +229,9 @@ Tests run entirely on desktop — no Pi hardware required.
 writer-deck/
 ├── main.py                     # Entry point
 ├── config_default.yaml         # Default configuration
-├── setup.sh                    # Pi one-shot setup
-├── deploy.sh                   # rsync deploy to Pi
+├── setup.sh                    # Pi one-shot setup (renders + installs the unit)
+├── deploy.sh                   # atomic release deploy + rollback over SSH
+├── writer-deck.service         # CANONICAL systemd unit TEMPLATE (setup.sh renders it)
 ├── writerdeck/
 │   ├── core/
 │   │   ├── app.py              # Main event loop + orchestrator

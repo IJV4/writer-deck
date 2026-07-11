@@ -124,6 +124,15 @@ class PygameKeyboardReader:
                     self._on_any_key()
                 continue
 
+            # Focus loss: the window won't receive KEYUP for a modifier held
+            # during Alt/Cmd-Tab, so reset the mapper to avoid a stuck modifier.
+            if event.type == getattr(pygame, "WINDOWFOCUSLOST", -1):
+                self._mapper.reset()
+                continue
+            if event.type == pygame.ACTIVEEVENT and getattr(event, "gain", 1) == 0:
+                self._mapper.reset()
+                continue
+
             if event.type == pygame.KEYDOWN:
                 scancode = _PYGAME_TO_EVDEV.get(event.key)
                 if scancode is not None:

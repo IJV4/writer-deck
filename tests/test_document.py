@@ -670,6 +670,32 @@ class TestFindReplace:
         doc.replace_at(0, 6, "world", "earth")
         assert doc.dirty is True
 
+    def test_replace_at_returns_bool(self):
+        doc = Document("hello world")
+        assert doc.replace_at(0, 6, "world", "earth") is True
+        assert doc.replace_at(0, 0, "xyz", "abc") is False
+
+    def test_replace_at_one_undo_entry(self):
+        # BUG-1: find "cat" replace "dog" via located match, one undo restores.
+        doc = Document("the cat sat")
+        pos = doc.find_next("cat", 0, 0)
+        assert pos == (0, 4)
+        assert doc.replace_at(pos[0], pos[1], "cat", "dog") is True
+        assert doc.text == "the dog sat"
+        assert doc.undo() is True
+        assert doc.text == "the cat sat"
+        # Exactly one entry — a second undo has nothing to pop.
+        assert doc.undo() is False
+
+    def test_replace_at_no_match_leaves_undo_unchanged(self):
+        # BUG-1: a no-op replace must not push an inert undo snapshot.
+        doc = Document("the cat sat")
+        doc.dirty = False
+        assert doc.replace_at(0, 0, "cat", "dog") is False
+        assert doc.text == "the cat sat"
+        assert doc.dirty is False
+        assert doc.undo() is False  # undo stack untouched
+
     def test_find_multiline(self):
         doc = Document("aaa\nbbb\nccc\naaa")
         pos = doc.find_next("aaa", 0, 1)

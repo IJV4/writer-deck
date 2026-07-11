@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import queue
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -303,10 +304,60 @@ class TestOverlayDispatch:
         assert app._doc.text == "hello earth"
         assert app._status.current == "Replaced"
 
+    def test_handle_overlay_result_replace_locates_match(self, tmp_path):
+        # BUG-1: cursor at (0,0) should still find and replace a later match.
+        app = self._make_app(tmp_path)
+        app._doc.load("the cat sat", "test")
+        app._doc.cursor_line = 0
+        app._doc.cursor_col = 0
+        app._handle_overlay_result({"find": "cat", "replace": "dog"})
+        assert app._doc.text == "the dog sat"
+        assert app._status.current == "Replaced"
+        # Cursor moved past the inserted text.
+        assert (app._doc.cursor_line, app._doc.cursor_col) == (0, 4 + len("dog"))
+        # Exactly one undo entry restores the original text.
+        assert app._doc.undo() is True
+        assert app._doc.text == "the cat sat"
+        assert app._doc.undo() is False
+
+    def test_handle_overlay_result_replace_no_match(self, tmp_path):
+        # BUG-1: a no-match replace changes nothing and shows "Not found".
+        app = self._make_app(tmp_path)
+        app._doc.load("the cat sat", "test")
+        app._doc.cursor_line = 0
+        app._doc.cursor_col = 0
+        app._handle_overlay_result({"find": "zzz", "replace": "dog"})
+        assert app._doc.text == "the cat sat"
+        assert app._status.current == "Not found"
+        assert app._doc.undo() is False  # undo stack untouched
+
     def test_handle_overlay_result_none(self, tmp_path):
         app = self._make_app(tmp_path)
         # Should not raise
         app._handle_overlay_result(None)
+
+    def test_handle_overlay_result_font_calls_on_exit(self, tmp_path):
+        # BUG-10: font change must exit the outgoing mode and preserve index.
+        from unittest.mock import MagicMock
+
+        app = self._make_app(tmp_path)
+        app._mode_idx = 1
+        app._mode = app._modes[1]
+        outgoing = app._mode
+        outgoing.on_exit = MagicMock(wraps=outgoing.on_exit)
+        app._handle_overlay_result({"font": "Courier"})
+        outgoing.on_exit.assert_called_once()
+        # Index preserved and a fresh mode instance is active at that index.
+        assert app._mode_idx == 1
+        assert app._mode is app._modes[1]
+        assert app._mode is not outgoing
+
+    def test_handle_overlay_result_font_preserves_scroll(self, tmp_path):
+        # BUG-10: in-mode scroll state survives a font change.
+        app = self._make_app(tmp_path)
+        app._mode._scroll_offset = 7
+        app._handle_overlay_result({"font": "Courier"})
+        assert app._mode._scroll_offset == 7
 
 
 class TestOnAnyKey:
@@ -477,3 +528,371 @@ class TestExportUSB:
         app = self._make_app(tmp_path)
         app._handle_action(KeyAction.EXPORT_USB, "")
         assert "No USB" in app._status.current
+
+
+class TestIdleDisplaySleep:
+    """LONG-1: aggressive panel idle-sleep after display_idle_sleep_seconds."""
+
+    def _make_app(self, tmp_path, overrides=None):
+        from writerdeck.utils.platform import HardwareProfile
+        from writerdeck.core.app import App
+
+        base_overrides = {
+            "documents_dir": str(tmp_path),
+            "display_idle_sleep_seconds": 20,
+            # Keep other tiers off so only the aggressive trigger is exercised.
+            "sleep_tiers": {
+                "display_off_minutes": 5,
+                "cpu_powersave_minutes": 0,
+                "system_suspend_minutes": 0,
+            },
+        }
+        if overrides:
+            base_overrides.update(overrides)
+        with patch("writerdeck.core.app.get_config") as mc, \
+             patch("writerdeck.core.app.detect_platform") as mp, \
+             patch("writerdeck.core.app.create_driver") as md:
+            mc.return_value = _make_config(base_overrides)
+            mp.return_value = HardwareProfile(
+                name="desktop", is_pi=False, is_pi_zero=False,
+                partial_refresh_max_streak=50, render_interval_ms=100, font_size=16,
+            )
+            md.return_value = MagicMock()
+            return App()
+
+    def _run_loop(self, app, ticks):
+        """Run the real main loop for a fixed number of iterations, then stop."""
+        state = {"n": 0}
+
+        def fake_wait(timeout=None):
+            state["n"] += 1
+            if state["n"] >= ticks:
+                app._running = False
+            return True
+
+        app._wakeup.wait = fake_wait  # type: ignore[assignment]
+        # Avoid touching real subsystems / disk during run().
+        app._keyboard.start = MagicMock()  # type: ignore[method-assign]
+        app._keyboard.stop = MagicMock()  # type: ignore[method-assign]
+        app._power.start = MagicMock()  # type: ignore[method-assign]
+        app._power.stop = MagicMock()  # type: ignore[method-assign]
+        app.run()
+
+    def test_sleeps_after_idle_threshold(self, tmp_path):
+        import time as _time
+        app = self._make_app(tmp_path)
+        # Pretend the last keystroke was well past the 20s aggressive threshold.
+        app._last_keypress = _time.monotonic() - 25
+        self._run_loop(app, ticks=1)
+        # Panel deep-sleep was triggered on the MAIN thread.
+        app._driver.sleep.assert_called()
+        assert app._display_sleeping is True
+
+    def test_does_not_sleep_before_threshold(self, tmp_path):
+        import time as _time
+        app = self._make_app(tmp_path)
+        app._last_keypress = _time.monotonic() - 5  # under 20s
+        self._run_loop(app, ticks=1)
+        assert app._display_sleeping is False
+
+    def test_key_thread_only_sets_flag_no_spi(self, tmp_path):
+        # _on_any_key runs on the keyboard background thread: it must NOT make
+        # any driver/SPI call, only set flags for the main thread.
+        app = self._make_app(tmp_path)
+        app._display_sleeping = True
+        app._on_any_key()
+        app._driver.wake.assert_not_called()
+        app._driver.sleep.assert_not_called()
+        assert app._needs_display_wake is True
+        assert app._display_sleeping is False
+
+    def test_key_wakes_and_full_refreshes(self, tmp_path):
+        import time as _time
+        from writerdeck.input.keymapper import KeyAction
+
+        app = self._make_app(tmp_path)
+        # Enter idle sleep on the first tick.
+        app._last_keypress = _time.monotonic() - 25
+
+        state = {"n": 0}
+
+        def fake_wait(timeout=None):
+            state["n"] += 1
+            if state["n"] == 1:
+                # After the first (sleeping) tick, simulate a keypress arriving:
+                # on_any_key sets the wake flag, then a real action is queued so
+                # the loop's render path runs wake() + full refresh.
+                app._on_any_key()
+                app._last_keypress = _time.monotonic()
+                app._keyboard.queue.put((KeyAction.CHAR, "a"))
+            if state["n"] >= 2:
+                app._running = False
+            return True
+
+        app._wakeup.wait = fake_wait  # type: ignore[assignment]
+        app._keyboard.start = MagicMock()  # type: ignore[method-assign]
+        app._keyboard.stop = MagicMock()  # type: ignore[method-assign]
+        app._power.start = MagicMock()  # type: ignore[method-assign]
+        app._power.stop = MagicMock()  # type: ignore[method-assign]
+
+        app.run()
+
+        # Panel slept once (tick 1) then woke once (tick 2, main thread).
+        app._driver.sleep.assert_called()
+        app._driver.wake.assert_called_once()
+        # A wake forces the first post-wake frame to be a full refresh.
+        app._driver.display_full.assert_called()
+        app._driver.display_partial.assert_not_called()
+
+
+class TestStatsCadenceDecoupled:
+    """PERF-1 part 2: volatile stats don't repaint on the per-keystroke path."""
+
+    def _make_app(self, tmp_path, overrides=None):
+        from writerdeck.core.app import App
+        from writerdeck.utils.platform import HardwareProfile
+
+        base_overrides = {"documents_dir": str(tmp_path)}
+        if overrides:
+            base_overrides.update(overrides)
+        with patch("writerdeck.core.app.get_config") as mc, \
+             patch("writerdeck.core.app.detect_platform") as mp, \
+             patch("writerdeck.core.app.create_driver") as md:
+            mc.return_value = _make_config(base_overrides)
+            mp.return_value = HardwareProfile(
+                name="desktop", is_pi=False, is_pi_zero=False,
+                partial_refresh_max_streak=50, render_interval_ms=100, font_size=16,
+            )
+            md.return_value = MagicMock()
+            return App()
+
+    def test_full_refresh_snapshots_live_stats(self, tmp_path):
+        app = self._make_app(tmp_path)
+        app._doc.load("hello world foo", "d.txt")
+        app._refresh.request_full()
+        app._render_and_refresh(force_full=True)
+        # The Words value painted on the full refresh is the live count.
+        assert app._stats_snapshot is not None
+        assert app._stats_snapshot["Words"] == str(app._doc.word_count)
+
+    def test_partial_freezes_stats_to_snapshot(self, tmp_path):
+        import time as _time
+        app = self._make_app(tmp_path)
+        # First: a full refresh captures the snapshot at the current word count.
+        app._doc.load("one two", "d.txt")
+        app._refresh.request_full()
+        app._render_and_refresh(force_full=True)
+        snapshot_words = app._stats_snapshot["Words"]
+
+        # Now type more words and take the PARTIAL path — the rendered frame's
+        # stats must be frozen to the snapshot so the footer bytes don't change.
+        app._doc.load("one two three four five", "d.txt")
+        app._refresh.record_refresh(was_full=True)  # clear force_full
+        app._last_keypress = _time.monotonic()
+
+        rendered = {}
+        orig_render = app._mode.render
+
+        def capture(doc, session):
+            frame = orig_render(doc, session)
+            rendered["frame"] = frame
+            return frame
+
+        app._mode.render = capture  # type: ignore[method-assign]
+        app._render_and_refresh()
+        # display_partial ran (not full), and the frame's stats were rewritten
+        # to the frozen snapshot value, not the new live count.
+        app._driver.display_partial.assert_called()
+        assert rendered["frame"].stats["Words"] == snapshot_words
+
+
+def _hw():
+    from writerdeck.utils.platform import HardwareProfile
+    return HardwareProfile(
+        name="desktop", is_pi=False, is_pi_zero=False,
+        partial_refresh_max_streak=50, render_interval_ms=100, font_size=16,
+    )
+
+
+def _make_app_with(tmp_path, overrides=None):
+    from writerdeck.core.app import App
+    base_overrides = {"documents_dir": str(tmp_path)}
+    if overrides:
+        base_overrides.update(overrides)
+    with patch("writerdeck.core.app.get_config") as mc, \
+         patch("writerdeck.core.app.detect_platform") as mp, \
+         patch("writerdeck.core.app.create_driver") as md:
+        mc.return_value = _make_config(base_overrides)
+        mp.return_value = _hw()
+        md.return_value = MagicMock()
+        return App()
+
+
+class TestRuntimeHeadlessFallback:
+    """FAULT-7 — panel dies at runtime; app keeps input + autosave, retries panel."""
+
+    def test_display_error_enters_headless_no_crash(self, tmp_path):
+        from writerdeck.display.driver import DisplayError
+        app = _make_app_with(tmp_path)
+        app._driver.display_full.side_effect = DisplayError("dead panel")
+        app._driver.display_partial.side_effect = DisplayError("dead panel")
+        app._refresh.request_full()
+        # Must NOT raise — degrades to headless instead.
+        app._render_and_refresh(force_full=True)
+        assert app._headless is True
+
+    def test_headless_keeps_draining_input_and_autosaving(self, tmp_path):
+        from writerdeck.display.driver import DisplayError
+        from writerdeck.input.keymapper import KeyAction
+
+        app = _make_app_with(tmp_path)
+        app._driver.display_full.side_effect = DisplayError("dead")
+        app._driver.display_partial.side_effect = DisplayError("dead")
+        # Panel retry defaults to every 30s; within these few ticks it won't
+        # fire, so the app stays headless throughout this run.
+
+        state = {"n": 0}
+
+        def fake_wait(timeout=None):
+            state["n"] += 1
+            if state["n"] == 1:
+                # First tick: type a char → triggers a render → DisplayError →
+                # headless. Queue more input for the following ticks.
+                app._on_any_key()
+                app._keyboard.queue.put((KeyAction.CHAR, "a"))
+            elif state["n"] == 2:
+                app._on_any_key()
+                app._keyboard.queue.put((KeyAction.CHAR, "b"))
+            if state["n"] >= 3:
+                app._running = False
+            return True
+
+        app._wakeup.wait = fake_wait  # type: ignore[assignment]
+        app._keyboard.start = MagicMock()  # type: ignore[method-assign]
+        app._keyboard.stop = MagicMock()  # type: ignore[method-assign]
+        app._power.start = MagicMock()  # type: ignore[method-assign]
+        app._power.stop = MagicMock()  # type: ignore[method-assign]
+        app._file_mgr.maybe_autosave = MagicMock()  # type: ignore[method-assign]
+
+        app.run()  # must not raise
+
+        assert app._headless is True
+        # Both typed characters made it into the document (input never dropped).
+        assert "a" in app._doc.text and "b" in app._doc.text
+        # Autosave kept being attempted every tick even while headless.
+        assert app._file_mgr.maybe_autosave.call_count >= 3
+
+    def test_panel_retried_on_interval(self, tmp_path):
+        app = _make_app_with(tmp_path)
+        app._headless = True
+        app._headless_retry_secs = 30.0
+        # Last retry was long ago → this call should attempt init().
+        app._last_headless_retry = time.monotonic() - 100
+        app._driver.init.side_effect = RuntimeError("still dead")
+        app._maybe_retry_panel()
+        app._driver.init.assert_called_once()
+        assert app._headless is True  # still dead → stays headless
+
+    def test_retry_too_soon_is_skipped(self, tmp_path):
+        app = _make_app_with(tmp_path)
+        app._headless = True
+        app._headless_retry_secs = 30.0
+        app._last_headless_retry = time.monotonic()  # just retried
+        app._maybe_retry_panel()
+        app._driver.init.assert_not_called()
+
+    def test_recovery_forces_full_refresh(self, tmp_path):
+        app = _make_app_with(tmp_path)
+        app._headless = True
+        app._last_headless_retry = time.monotonic() - 100
+        # init() succeeds this time → recovery path renders a full refresh.
+        app._driver.init.side_effect = None
+        app._maybe_retry_panel()
+        assert app._headless is False
+        # A forced full refresh was rendered on recovery.
+        app._driver.display_full.assert_called()
+
+    def test_recovery_failing_again_stays_headless(self, tmp_path):
+        from writerdeck.display.driver import DisplayError
+        app = _make_app_with(tmp_path)
+        app._headless = True
+        app._last_headless_retry = time.monotonic() - 100
+        app._driver.init.side_effect = None  # init recovers
+        app._driver.display_full.side_effect = DisplayError("dead again")
+        app._maybe_retry_panel()
+        # Recovery frame failed → fell straight back to headless.
+        assert app._headless is True
+
+
+class TestScreensaver:
+    """LONG-3 — blank to a white 'paused' frame before long-idle deep sleep."""
+
+    def _run_loop(self, app, ticks):
+        state = {"n": 0}
+
+        def fake_wait(timeout=None):
+            state["n"] += 1
+            if state["n"] >= ticks:
+                app._running = False
+            return True
+
+        app._wakeup.wait = fake_wait  # type: ignore[assignment]
+        app._keyboard.start = MagicMock()  # type: ignore[method-assign]
+        app._keyboard.stop = MagicMock()  # type: ignore[method-assign]
+        app._power.start = MagicMock()  # type: ignore[method-assign]
+        app._power.stop = MagicMock()  # type: ignore[method-assign]
+        app.run()
+
+    def test_paused_frame_shown_before_sleep(self, tmp_path):
+        app = _make_app_with(
+            tmp_path,
+            {
+                "display_idle_sleep_seconds": 20,
+                "display_screensaver_seconds": 20,
+                "sleep_tiers": {
+                    "display_off_minutes": 5,
+                    "cpu_powersave_minutes": 0,
+                    "system_suspend_minutes": 0,
+                },
+            },
+        )
+        app._last_keypress = time.monotonic() - 25  # past the idle threshold
+        self._run_loop(app, ticks=1)
+        # The last displayed frame before sleep was the white/paused frame, and
+        # then the panel deep-slept.
+        app._driver.display_full.assert_called()
+        app._driver.sleep.assert_called()
+        assert app._screensaver_shown is True
+        assert app._display_sleeping is True
+
+    def test_screensaver_disabled_when_zero(self, tmp_path):
+        app = _make_app_with(
+            tmp_path,
+            {
+                "display_idle_sleep_seconds": 20,
+                "display_screensaver_seconds": 0,  # disabled
+                "sleep_tiers": {
+                    "display_off_minutes": 5,
+                    "cpu_powersave_minutes": 0,
+                    "system_suspend_minutes": 0,
+                },
+            },
+        )
+        app._last_keypress = time.monotonic() - 25
+        self._run_loop(app, ticks=1)
+        assert app._screensaver_shown is False
+        # Panel still sleeps, just without the paused frame.
+        app._driver.sleep.assert_called()
+
+    def test_key_rearms_screensaver(self, tmp_path):
+        app = _make_app_with(tmp_path)
+        app._screensaver_shown = True
+        app._on_any_key()
+        assert app._screensaver_shown is False
+
+    def test_screensaver_display_error_goes_headless(self, tmp_path):
+        from writerdeck.display.driver import DisplayError
+        app = _make_app_with(tmp_path)
+        app._driver.display_full.side_effect = DisplayError("dead")
+        app._show_screensaver()
+        assert app._headless is True

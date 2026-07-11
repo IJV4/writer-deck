@@ -39,6 +39,25 @@ class TestModifierTracking:
         action, char = m.process_event(29, 1)
         assert action == KeyAction.UNKNOWN
 
+    def test_reset_clears_held_modifiers(self):
+        m = KeyMapper()
+        m.process_event(29, 1)  # Ctrl press
+        m.process_event(42, 1)  # Shift press
+        assert m._ctrl_held is True
+        assert m._shift_held is True
+        m.reset()
+        assert m._ctrl_held is False
+        assert m._shift_held is False
+
+    def test_reset_then_plain_key(self):
+        m = KeyMapper()
+        m.process_event(29, 1)  # Ctrl press (would latch)
+        m.reset()
+        # After reset, 's' should be a plain char, not SAVE
+        action, char = m.process_event(31, 1)
+        assert action == KeyAction.CHAR
+        assert char == "s"
+
     def test_release_returns_unknown(self):
         m = KeyMapper()
         action, char = m.process_event(30, 0)  # 'a' release

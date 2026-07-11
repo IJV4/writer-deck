@@ -117,11 +117,17 @@ class StdinReader:
 
                 if ch == "\x1b":
                     # Possible escape sequence
-                    action = self._read_escape_sequence(ch)
+                    action, leftover = self._read_escape_sequence(ch)
                     if action:
                         self.queue.put((action, ""))
                     else:
                         self.queue.put((KeyAction.ESCAPE, ""))
+                        # An unrecognized sequence (e.g. Alt+F sends ESC then
+                        # 'f') consumed trailing bytes; re-emit any printable
+                        # ones as CHARs so the keystroke is not dropped.
+                        for lch in leftover:
+                            if lch.isprintable():
+                                self.queue.put((KeyAction.CHAR, lch))
                 elif ch == "\r" or ch == "\n":
                     self.queue.put((KeyAction.ENTER, ""))
                 elif ch == "\x7f" or ch == "\x08":
@@ -135,8 +141,14 @@ class StdinReader:
         finally:
             self._restore_terminal()
 
-    def _read_escape_sequence(self, first: str) -> KeyAction | None:
-        """Try to read a full ANSI escape sequence."""
+    def _read_escape_sequence(self, first: str) -> tuple[KeyAction | None, str]:
+        """Try to read a full ANSI escape sequence.
+
+        Returns ``(action, leftover)`` where ``action`` is the mapped
+        KeyAction (or None if unrecognized) and ``leftover`` is the bytes read
+        after the leading ESC that did not form a recognized sequence — the
+        caller re-emits these so e.g. the ``f`` in Alt+F is not dropped.
+        """
         buf = first
         # Read more characters with short timeout
         for _ in range(8):
@@ -147,11 +159,11 @@ class StdinReader:
                 break
             buf += ch
             if buf in _ESCAPE_SEQUENCES:
-                return _ESCAPE_SEQUENCES[buf]
+                return _ESCAPE_SEQUENCES[buf], ""
             # Tilde-terminated sequences
             if ch == "~":
-                return _ESCAPE_SEQUENCES.get(buf)
+                return _ESCAPE_SEQUENCES.get(buf), "" if buf in _ESCAPE_SEQUENCES else buf[1:]
             # Letter-terminated CSI sequences
             if ch.isalpha() and len(buf) >= 3:
-                return _ESCAPE_SEQUENCES.get(buf)
-        return _ESCAPE_SEQUENCES.get(buf)
+                return _ESCAPE_SEQUENCES.get(buf), "" if buf in _ESCAPE_SEQUENCES else buf[1:]
+        return _ESCAPE_SEQUENCES.get(buf), "" if buf in _ESCAPE_SEQUENCES else buf[1:]
