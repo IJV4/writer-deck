@@ -13,12 +13,20 @@ def find_usb_mount() -> Path | None:
         if not base_path.exists():
             continue
         # Check subdirectories (e.g., /media/pi/USBDRIVE)
-        for user_dir in base_path.iterdir():
+        try:
+            user_dirs = list(base_path.iterdir())
+        except (PermissionError, OSError):
+            continue
+        for user_dir in user_dirs:
             if user_dir.is_dir():
                 # Could be /media/USBDRIVE or /media/pi/USBDRIVE
                 if user_dir.is_mount():
                     return user_dir
-                for sub in user_dir.iterdir():
+                try:
+                    subs = list(user_dir.iterdir())
+                except (PermissionError, OSError):
+                    continue
+                for sub in subs:
                     if sub.is_dir() and sub.is_mount():
                         return sub
     return None
@@ -34,10 +42,11 @@ def export_documents(docs_dir: Path, target: Path) -> int:
 
     count = 0
     for pattern in ("*.txt", "*.md"):
-        for src in docs_dir.glob(pattern):
+        for src in docs_dir.rglob(pattern):
             if src.name.endswith(".autosave"):
                 continue
-            dst = export_dir / src.name
+            dst = export_dir / src.relative_to(docs_dir)
+            dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(src), str(dst))
             count += 1
     return count

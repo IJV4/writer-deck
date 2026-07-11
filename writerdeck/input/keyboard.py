@@ -102,7 +102,17 @@ class KeyboardReader:
             except OSError:
                 logger.warning("Keyboard device disconnected, retrying in 2s…")
                 time.sleep(2)
-                try:
-                    dev = evdev.InputDevice(device_path)
-                except Exception:
-                    pass
+                dev = self._reconnect(evdev, device_path, dev)
+
+    def _reconnect(self, evdev, device_path: str, dev):  # type: ignore[no-untyped-def]
+        """Reopen the device after a disconnect.
+
+        Resets the KeyMapper so a modifier held during the unplug does not stay
+        latched, then attempts to reopen. Returns the (possibly unchanged)
+        device handle so the read loop can continue.
+        """
+        self._mapper.reset()
+        try:
+            return evdev.InputDevice(device_path)
+        except Exception:
+            return dev

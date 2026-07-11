@@ -1,5 +1,6 @@
 """Writer Deck — distraction-free e-ink writing device."""
 
+import atexit
 import logging
 import logging.handlers
 import os
@@ -42,6 +43,10 @@ def main() -> None:
     _setup_logging(log_dir)
 
     app = App()
+    # Belt-and-suspenders: deep-sleep the panel on any interpreter exit path,
+    # even one that bypasses the signal handler / emergency_save. close() is
+    # idempotent, so running it here plus in _do_shutdown is safe.
+    atexit.register(app._driver.close)
     try:
         app.run()
     except KeyboardInterrupt:

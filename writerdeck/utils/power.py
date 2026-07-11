@@ -11,6 +11,11 @@ from collections import deque
 
 logger = logging.getLogger(__name__)
 
+# Number of consecutive sub-threshold battery samples required before we shut
+# down. Guards against a single glitchy PiSugar reading triggering poweroff and
+# losing the session (readings are noisy under load).
+SHUTDOWN_DEBOUNCE_SAMPLES = 3
+
 
 class Power:
     def __init__(
@@ -35,6 +40,11 @@ class Power:
 
         self._thread: threading.Thread | None = None
         self._running = False
+
+        # Consecutive sub-threshold (critical, not charging) samples seen. Reset
+        # to 0 on any healthy or charging reading; shutdown only fires once this
+        # reaches SHUTDOWN_DEBOUNCE_SAMPLES.
+        self._low_battery_streak = 0
 
         # Battery history for drain rate estimation
         self._history: deque[tuple[float, int]] = deque(maxlen=60)
@@ -84,13 +94,11 @@ class Power:
 
     def _query(self, command: str) -> str | None:
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            sock.connect(self._socket_path)
-            sock.sendall((command + "\n").encode())
-            data = sock.recv(256).decode().strip()
-            sock.close()
-            return data
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(2)
+                sock.connect(self._socket_path)
+                sock.sendall((command + "\n").encode())
+                return sock.recv(256).decode().strip()
         except Exception:
             return None
 
@@ -120,13 +128,46 @@ class Power:
         while self._running:
             self._update()
 
-            if self._available and self.battery_level <= self._shutdown_pct and not self.is_charging:
+            critical = (
+                self._available
+                and self.battery_level <= self._shutdown_pct
+                and not self.is_charging
+            )
+            if critical:
+                self._low_battery_streak += 1
+            else:
+                # Any healthy or charging reading clears the debounce so a single
+                # glitchy sample never counts toward shutdown.
+                self._low_battery_streak = 0
+
+            if self._low_battery_streak >= SHUTDOWN_DEBOUNCE_SAMPLES:
                 logger.critical(
-                    "Battery critically low (%d%%) — initiating shutdown",
+                    "Battery critically low (%d%%) for %d consecutive samples — "
+                    "initiating shutdown",
                     self.battery_level,
+                    self._low_battery_streak,
                 )
+                # FAULT-5: the emergency callback (app._emergency_shutdown →
+                # emergency_save → driver.sleep()) MUST run to completion — deep-
+                # sleeping the panel while the battery still holds — BEFORE we
+                # cut power. This call is synchronous, so poweroff is only issued
+                # once it returns. Do not rely on poweroff's own service-stop to
+                # win the race against high-voltage panel damage.
                 if self._shutdown_callback:
-                    self._shutdown_callback()
+                    try:
+                        self._shutdown_callback()
+                        logger.info(
+                            "Emergency callback complete (panel slept) — issuing poweroff"
+                        )
+                    except Exception:
+                        # A failure to sleep the panel must NOT prevent poweroff:
+                        # protecting the battery is the higher priority, and the
+                        # systemd service-stop is a secondary chance to sleep it.
+                        logger.exception(
+                            "Emergency callback raised — powering off anyway"
+                        )
+                else:
+                    logger.info("No emergency callback — issuing poweroff")
                 os.system("sudo systemctl poweroff")
                 return
 

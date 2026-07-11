@@ -24,7 +24,10 @@ _SCHEMA: dict[str, tuple[tuple[type, ...], tuple[Any, Any] | None]] = {
     "partial_refresh_max_streak": ((int, float), (1, 1000)),
     "render_interval_ms": ((int, float), (50, 10000)),
     "idle_full_refresh_seconds": ((int, float), (1, 600)),
+    "full_refresh_max_seconds": ((int, float), (1, 86400)),
     "display_sleep_minutes": ((int, float), (0, 1440)),
+    "display_idle_sleep_seconds": ((int, float), (0, 86400)),
+    "display_screensaver_seconds": ((int, float), (0, 86400)),
     "keyboard_device": ((str,), None),
     "keyboard_input": ((str,), None),
     "mode_order": ((list,), None),
@@ -109,8 +112,20 @@ class Config:
         return int(self._data["idle_full_refresh_seconds"])
 
     @property
+    def full_refresh_max_seconds(self) -> int:
+        return int(self._data.get("full_refresh_max_seconds", 300))
+
+    @property
     def display_sleep_minutes(self) -> int:
         return int(self._data["display_sleep_minutes"])
+
+    @property
+    def display_idle_sleep_seconds(self) -> int:
+        return int(self._data.get("display_idle_sleep_seconds", 20))
+
+    @property
+    def display_screensaver_seconds(self) -> int:
+        return int(self._data.get("display_screensaver_seconds", 1800))
 
     @property
     def keyboard_device(self) -> str:

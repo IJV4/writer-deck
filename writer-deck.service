@@ -1,13 +1,31 @@
+# Writer Deck systemd unit — CANONICAL TEMPLATE (single source of truth).
+#
+# OPS-2: This is the ONE authoritative copy of the unit. setup.sh renders it by
+# substituting the __PLACEHOLDER__ tokens below (via sed) and installs the result
+# to /etc/systemd/system/writer-deck.service. Do NOT maintain a second copy in a
+# here-doc — add/modify directives here only.
+#
+# Because of the __PLACEHOLDER__ tokens this file is intentionally NOT a valid
+# unit as checked in; it becomes valid once setup.sh renders it. The placeholders:
+#   __USER__     -> the service user (setup.sh: $USER)
+#   __WORKDIR__  -> the active-release path, i.e. the `current` symlink
+#                   (setup.sh: $CURRENT_LINK, e.g. /home/pi/writer-deck/current)
+#   __VENV__     -> the venv inside the active release
+#                   (setup.sh: $CURRENT_LINK/venv)
+#
+# OPS-1: WorkingDirectory/ExecStart/ExecStopPost/PYTHONPATH all point at the
+# `current` symlink so an atomic release swap (deploy.sh) + restart switches code
+# with no in-place mutation, and rollback is a symlink repoint + restart.
 [Unit]
 Description=Writer Deck Application
 After=local-fs.target
 
 [Service]
-User=pi
-WorkingDirectory=/home/pi/projects/writer-deck
-ExecStart=/home/pi/projects/writer-deck/venv/bin/python main.py
+User=__USER__
+WorkingDirectory=__WORKDIR__
+ExecStart=__VENV__/bin/python main.py
 SupplementaryGroups=input spi gpio i2c
-Environment="PYTHONPATH=/home/pi/projects/writer-deck/lib"
+Environment="PYTHONPATH=__WORKDIR__/lib"
 Restart=on-failure
 RestartSec=10
 OOMScoreAdjust=-500
@@ -15,6 +33,14 @@ StandardOutput=journal
 WatchdogSec=120
 Type=simple
 NotifyAccess=all
+# Panel deep-sleep backstop (FAULT-2). ExecStopPost runs on EVERY exit —
+# clean stop, timeout, or crash/kill — unlike ExecStop (clean stop only), so
+# the panel gets deep-slept even if the app is SIGKILLed. TimeoutStopSec=15
+# lets the in-process SIGTERM handler win the SPI bus first before this
+# separate ExecStopPost process re-inits and sleeps the panel.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+ExecStopPost=__VENV__/bin/python __WORKDIR__/tools/epd_sleep.py
 
 [Install]
 WantedBy=multi-user.target

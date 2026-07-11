@@ -40,6 +40,9 @@ class BaseMode(ABC):
         # Set by render() so handle_input() can do visual-row Up/Down navigation.
         self._wrapped_lines: list[str] = []
         self._row_map: list[tuple[int, int]] = []  # [(doc_line_idx, char_start), ...]
+        # Number of wrapped rows produced by the last render(); used to clamp
+        # PAGE_DOWN so scrolling can't run off the end into a blank screen.
+        self._wrapped_len: int = 0
 
     def on_enter(self) -> None:
         self._scroll_offset = 0
@@ -223,7 +226,10 @@ class BaseMode(ABC):
             self._scroll_offset = max(0, self._scroll_offset - 20)
             editing_action = False
         elif action == KeyAction.PAGE_DOWN:
-            self._scroll_offset += 20
+            # Clamp against the last rendered wrapped length so scrolling can't
+            # run past the end into a blank screen (BUG-3).
+            max_offset = max(0, self._wrapped_len - 1)
+            self._scroll_offset = min(self._scroll_offset + 20, max_offset)
             editing_action = False
         else:
             return False

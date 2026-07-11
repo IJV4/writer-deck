@@ -324,13 +324,20 @@ class Document:
                 return (line_idx, pos)
         return None
 
-    def replace_at(self, line: int, col: int, old: str, new: str) -> None:
-        """Replace old with new at the given position."""
-        self._push_undo("replace")
+    def replace_at(self, line: int, col: int, old: str, new: str) -> bool:
+        """Replace old with new at the given position.
+
+        Returns True if the text at (line, col) matched ``old`` and was
+        replaced. Only pushes an undo snapshot / sets ``dirty`` when it
+        actually edits, so a no-op replace leaves the undo stack untouched.
+        """
         text = self._lines[line]
-        if text[col : col + len(old)] == old:
-            self._lines[line] = text[:col] + new + text[col + len(old) :]
-            self.dirty = True
+        if text[col : col + len(old)] != old:
+            return False
+        self._push_undo("replace")
+        self._lines[line] = text[:col] + new + text[col + len(old) :]
+        self.dirty = True
+        return True
 
     # -- Cursor movement ---------------------------------------------------
 

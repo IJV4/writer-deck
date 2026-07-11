@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from writerdeck.core.config import get_config
 from writerdeck.core.document import Document
 from writerdeck.core.session import Session
-from writerdeck.display.driver import create_driver, DisplayDriver
+from writerdeck.display.driver import create_driver, DisplayDriver, DisplayError
 from writerdeck.display.refresh_manager import RefreshManager
 from writerdeck.display.renderer import render
 from writerdeck.input.keymapper import KeyAction
@@ -41,6 +41,7 @@ class App:
         self._refresh = RefreshManager(
             max_streak=self._config.partial_refresh_max_streak,
             idle_full_seconds=self._config.idle_full_refresh_seconds,
+            full_refresh_max_seconds=self._config.full_refresh_max_seconds,
         )
 
         # Document & session
@@ -83,6 +84,12 @@ class App:
         # Overlay (font picker, file picker, find/replace)
         self._overlay = None
 
+        # PERF-1: last stats dict painted on a full refresh. On the per-keystroke
+        # partial path we re-use this snapshot so the volatile Words/timer/sidebar
+        # region renders identical bytes (no diff there → no repaint). Refreshed
+        # values land on the next full/streak/idle refresh.
+        self._stats_snapshot: dict[str, str] | None = None
+
         # Power
         self._power = Power(
             socket_path=self._config.pisugar_socket,
@@ -95,6 +102,21 @@ class App:
         self._tier2_active = False
         self._tier3_active = False
         self._needs_display_wake = False  # set by _on_any_key; handled on main thread
+
+        # FAULT-7: runtime headless/degraded state. If the panel fails repeatedly
+        # at runtime (DisplayError from the FAULT-6 retry path), we stop touching
+        # it but KEEP the main loop running — input drain, autosave and session
+        # persist continue so the user's words are never lost. The panel is
+        # retried every _headless_retry_secs; a successful retry forces a full
+        # refresh and resumes normal rendering.
+        self._headless = False
+        self._headless_retry_secs = 30.0
+        self._last_headless_retry = 0.0
+
+        # LONG-3: screensaver state. Before the long-idle deep-sleep tier we paint
+        # a mostly-white "paused" frame so a static high-contrast page doesn't sit
+        # on the panel for hours. Tracked so it's painted exactly once per idle.
+        self._screensaver_shown = False
 
         # Wakeup event — set by _on_any_key() to interrupt the loop's idle sleep
         self._wakeup = threading.Event()
@@ -153,6 +175,19 @@ class App:
         cpu_save_secs = tiers.get("cpu_powersave_minutes", 15) * 60
         suspend_secs = tiers.get("system_suspend_minutes", 30) * 60
 
+        # Aggressive panel idle-sleep: deep-sleep the panel after this many
+        # seconds of no keystroke (bounds the powered-and-idle window). This is
+        # the effective Tier-1 trigger; falls back to display_off_minutes if the
+        # aggressive trigger is disabled (0).
+        idle_sleep_secs = self._config.display_idle_sleep_seconds
+        if idle_sleep_secs > 0:
+            display_off_secs = idle_sleep_secs
+
+        # LONG-3: paint a white "paused" screensaver frame this many seconds into
+        # idle, before the panel deep-sleeps, so a static page doesn't burn in.
+        # Clamped to fire no later than the display-sleep trigger (0 = disabled).
+        screensaver_secs = self._config.display_screensaver_seconds
+
         while self._running:
             # Pump events for poll-based readers (e.g. PygameKeyboardReader)
             if hasattr(self._keyboard, "poll"):
@@ -170,8 +205,25 @@ class App:
             # Autosave check
             self._file_mgr.maybe_autosave(self._doc)
 
+            # FAULT-7: if the panel died at runtime, periodically try to bring it
+            # back. Input drain + autosave above already ran, so words are safe
+            # regardless of the panel. A successful retry resumes normal rendering
+            # with a forced full refresh.
+            if self._headless:
+                self._maybe_retry_panel()
+
             # Sleep tier checks
             idle_secs = time.monotonic() - self._last_keypress
+
+            # LONG-3: screensaver — blank to white just before the panel sleeps.
+            if (
+                screensaver_secs > 0
+                and not self._display_sleeping
+                and not self._headless
+                and not self._screensaver_shown
+                and idle_secs > min(screensaver_secs, display_off_secs)
+            ):
+                self._show_screensaver()
 
             # Tier 1: display sleep
             if (
@@ -180,7 +232,10 @@ class App:
                 and idle_secs > display_off_secs
             ):
                 self._display_sleeping = True
-                self._driver.sleep()
+                try:
+                    self._driver.sleep()
+                except Exception as e:
+                    logger.warning("Display sleep failed: %s", e)
                 logger.info("Display sleeping (idle)")
 
             # Tier 2: CPU powersave
@@ -200,9 +255,12 @@ class App:
                 self._enter_system_suspend()
 
             # Render if something changed
-            if changed and not self._display_sleeping:
+            if changed and not self._display_sleeping and not self._headless:
                 if self._needs_display_wake:
-                    self._driver.wake()
+                    try:
+                        self._driver.wake()
+                    except Exception as e:
+                        logger.warning("Display wake failed: %s", e)
                     self._needs_display_wake = False
                     logger.info("Display woken from sleep")
                 self._render_and_refresh()
@@ -325,21 +383,36 @@ class App:
                 self._status.show("Deleted")
             elif "font" in result:
                 logger.info("Font changed to: %s", result["font"])
-                # Rebuild modes with new font
+                # Preserve in-mode scroll state and cleanly exit the outgoing
+                # mode before rebuilding, then re-enter the same mode index.
+                scroll_offset = getattr(self._mode, "_scroll_offset", 0)
+                self._mode.on_exit()
                 self._config._data["font_family"] = result["font"]
                 self._modes = self._build_modes()
                 self._mode = self._modes[self._mode_idx % len(self._modes)]
                 self._mode.on_enter()
+                # on_enter() resets scroll to 0; restore the prior offset.
+                if hasattr(self._mode, "_scroll_offset"):
+                    self._mode._scroll_offset = scroll_offset
             elif "find" in result:
                 query = result["find"]
                 replace = result.get("replace")
                 if replace is not None:
-                    # Replace at current cursor
-                    self._doc.replace_at(
-                        self._doc.cursor_line, self._doc.cursor_col,
-                        query, replace,
+                    # Locate the match first (wrap-around handled by find_next),
+                    # move the cursor there, replace, then advance past the
+                    # inserted text. replace_at only edits (and touches the undo
+                    # stack) when the located text actually matches.
+                    pos = self._doc.find_next(
+                        query, self._doc.cursor_line, self._doc.cursor_col,
                     )
-                    self._status.show("Replaced")
+                    if pos is not None and self._doc.replace_at(
+                        pos[0], pos[1], query, replace
+                    ):
+                        self._doc.cursor_line = pos[0]
+                        self._doc.cursor_col = pos[1] + len(replace)
+                        self._status.show("Replaced")
+                    else:
+                        self._status.show("Not found")
                 else:
                     pos = self._doc.find_next(
                         query, self._doc.cursor_line, self._doc.cursor_col + 1,
@@ -404,27 +477,128 @@ class App:
         if will_full and idle_secs < 2.0:
             will_full = self._refresh.should_full_refresh(ignore_streak=True)
 
+        # PERF-1: decouple the volatile stats cadence from per-keystroke input.
+        # On the partial path, freeze the stats to the snapshot captured on the
+        # last full refresh so the Words/timer/sidebar bytes are unchanged and
+        # don't drag their rows into the dirty diff. Full refreshes paint (and
+        # snapshot) the live values.
         if will_full:
-            deep_clean_threshold = self._config.idle_deep_clean_seconds
-            is_deep_clean = deep_clean_threshold > 0 and idle_secs >= deep_clean_threshold
+            if frame.stats is not None:
+                self._stats_snapshot = dict(frame.stats)
+        elif frame.stats is not None:
+            frame.stats = (
+                dict(self._stats_snapshot) if self._stats_snapshot is not None else None
+            )
 
-            if is_deep_clean:
-                # User has been away long enough — do a GC16 clean to wipe
-                # any accumulated ghosting. Uses init() waveform, not init_fast().
-                image = render(frame, self._config.font_family, self._config.font_size)
-                self._driver.display_clean(image)
+        # FAULT-6/FAULT-7: the display op is bounded-retry wrapped in the driver.
+        # If it still fails it raises DisplayError — catch it here, degrade to a
+        # headless state (input + autosave keep running, panel retried on an
+        # interval) and skip this frame rather than let the exception crash the
+        # app and lose the session.
+        try:
+            if will_full:
+                deep_clean_threshold = self._config.idle_deep_clean_seconds
+                is_deep_clean = (
+                    deep_clean_threshold > 0 and idle_secs >= deep_clean_threshold
+                )
+
+                if is_deep_clean:
+                    # User has been away long enough — do a GC16 clean to wipe
+                    # any accumulated ghosting. Uses init() waveform, not init_fast().
+                    image = render(
+                        frame, self._config.font_family, self._config.font_size
+                    )
+                    self._driver.display_clean(image)
+                else:
+                    image = render(
+                        frame, self._config.font_family, self._config.font_size
+                    )
+                    self._driver.display_full(image)
             else:
                 image = render(frame, self._config.font_family, self._config.font_size)
-                self._driver.display_full(image)
-        else:
-            image = render(frame, self._config.font_family, self._config.font_size)
-            self._driver.display_partial(image)
+                self._driver.display_partial(image)
+        except DisplayError:
+            self._enter_headless()
+            return
 
         self._refresh.record_refresh(was_full=will_full)
+
+    # -- LONG-3 screensaver / FAULT-7 headless ----------------------------
+
+    def _show_screensaver(self) -> None:
+        """Paint a mostly-white 'paused' frame before long-idle deep sleep (LONG-3).
+
+        A full refresh so the previous high-contrast page is fully cleared to
+        white (retention mitigation). On the next keystroke the app wakes and
+        forces a full refresh, restoring the page. Any display failure degrades
+        to headless rather than crashing.
+        """
+        from writerdeck.display.splash import render_paused
+        self._screensaver_shown = True
+        try:
+            self._driver.display_full(render_paused())
+            logger.info("Screensaver shown (blanked to white before deep sleep)")
+        except DisplayError:
+            self._enter_headless()
+        except Exception as e:
+            logger.warning("Screensaver render failed: %s", e)
+
+    def _enter_headless(self) -> None:
+        """Switch to a headless/degraded mode after repeated panel failure (FAULT-7).
+
+        The main loop keeps draining input, autosaving and persisting the session
+        — only rendering is suspended. The panel is retried on an interval by
+        _maybe_retry_panel(). Idempotent.
+        """
+        if self._headless:
+            return
+        self._headless = True
+        self._last_headless_retry = time.monotonic()
+        self._status.show("Display error — text is safe, retrying screen")
+        logger.error(
+            "Display failed repeatedly — entering headless mode; input and "
+            "autosave continue, panel will be retried every %.0fs",
+            self._headless_retry_secs,
+        )
+
+    def _maybe_retry_panel(self) -> None:
+        """Periodically try to recover the panel while headless (FAULT-7).
+
+        On success, resume normal rendering with a forced full refresh so the
+        current document is redrawn from scratch.
+        """
+        now = time.monotonic()
+        if now - self._last_headless_retry < self._headless_retry_secs:
+            return
+        self._last_headless_retry = now
+        logger.info("Headless: retrying display panel")
+        try:
+            # Re-initialise the panel from scratch (also restores any state the
+            # driver dropped on the fault). init() raises on hardware failure.
+            self._driver.init()
+        except Exception as e:
+            logger.warning("Panel retry failed, staying headless: %s", e)
+            return
+        # Recovered — resume rendering with a full refresh.
+        self._headless = False
+        self._refresh.request_full()
+        self._status.show("Display recovered")
+        logger.info("Panel recovered — resuming rendering with a full refresh")
+        try:
+            self._render_and_refresh(force_full=True)
+        except DisplayError:
+            # Recovery frame failed again — fall straight back to headless.
+            self._enter_headless()
 
     def _on_any_key(self) -> None:
         self._wakeup.set()
         self._last_keypress = time.monotonic()
+        # PERF-4: reset the idle-full timer against the keypress so a brief
+        # pause-then-type takes the partial path instead of a surprise full.
+        self._refresh.note_keypress()
+        # LONG-3: any key ends the idle period, so re-arm the screensaver for the
+        # next idle stretch.
+        self._screensaver_shown = False
         if self._display_sleeping:
             # Don't touch the display driver here — we're on the keyboard
             # background thread and EPD SPI is not thread-safe.  Signal the

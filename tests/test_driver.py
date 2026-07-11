@@ -5,9 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 from PIL import Image
 
-from writerdeck.display.driver import EPaperDriver, NullDriver, create_driver, WIDTH, HEIGHT
+from writerdeck.display.driver import (
+    DisplayError,
+    EPaperDriver,
+    NullDriver,
+    compute_dirty_bands,
+    compute_x_window,
+    create_driver,
+    WIDTH,
+    HEIGHT,
+)
 
 # ---------------------------------------------------------------------------
 # EPaperDriver bounding-box partial refresh
@@ -126,6 +136,21 @@ class TestEPaperDriverBoundingBoxPartial:
         mock_epd.display_Partial.assert_called_once()
         mock_epd.display.assert_not_called()
 
+    def test_escalation_boundary_at_threshold_stays_partial(self):
+        # Exactly 144/480 = 0.30 is NOT > 0.30, so it must stay a partial.
+        drv, mock_epd = _make_epd_driver()
+        drv.display_partial(_image_with_black_rows(list(range(144))))
+        mock_epd.display_Partial.assert_called_once()
+        mock_epd.display.assert_not_called()
+
+    def test_escalation_boundary_just_above_threshold_escalates(self):
+        # 145/480 ≈ 0.302 is > 0.30, so it must escalate to fast-full.
+        drv, mock_epd = _make_epd_driver()
+        drv.display_partial(_image_with_black_rows(list(range(145))))
+        mock_epd.init_fast.assert_called_once()
+        mock_epd.display.assert_called_once()
+        mock_epd.display_Partial.assert_not_called()
+
     def test_escalation_updates_last_buf(self):
         drv, mock_epd = _make_epd_driver()
         rows = list(range(0, 200))
@@ -199,6 +224,43 @@ class TestEPaperDriverBoundingBoxPartial:
         drv, mock_epd = _make_epd_driver(last_buf=last, mode=None)
         drv.wake()
         assert drv._last_buf is last
+
+    def test_close_is_idempotent(self):
+        # close() runs from both the signal handler and atexit — calling it
+        # twice must be safe and must not Clear()/sleep() the panel twice.
+        drv, mock_epd = _make_epd_driver(mode="full")
+        drv.close()
+        drv.close()
+        mock_epd.Clear.assert_called_once()
+        mock_epd.sleep.assert_called_once()
+
+    def test_sleep_is_idempotent(self):
+        drv, mock_epd = _make_epd_driver(mode="full")
+        drv.sleep()
+        drv.sleep()
+        mock_epd.sleep.assert_called_once()
+
+    def test_close_after_sleep_does_not_clear(self):
+        # If already slept, close() must not attempt Clear() again.
+        drv, mock_epd = _make_epd_driver(mode="full")
+        drv.sleep()
+        drv.close()
+        mock_epd.Clear.assert_not_called()
+        mock_epd.sleep.assert_called_once()
+
+    def test_wake_resets_slept_flag(self):
+        # After sleep + wake, the panel is powered again and can sleep once more.
+        drv, mock_epd = _make_epd_driver(mode="full")
+        drv.sleep()
+        drv.wake()
+        drv.sleep()
+        assert mock_epd.sleep.call_count == 2
+
+    def test_sleep_close_no_epd_is_safe(self):
+        # A driver that never initialised (self._epd is None) must not raise.
+        drv = EPaperDriver()
+        drv.sleep()
+        drv.close()
 
 
 def _make_image() -> Image.Image:
@@ -282,6 +344,13 @@ class TestNullDriverSleep:
         drv.close()
         assert drv._sleeping is True
 
+    def test_close_twice_is_safe(self, tmp_path):
+        drv = NullDriver(output_dir=str(tmp_path))
+        drv.init()
+        drv.close()
+        drv.close()  # must not raise
+        assert drv._sleeping is True
+
     def test_display_after_sleep_wakes(self, tmp_path):
         drv = NullDriver(output_dir=str(tmp_path))
         drv.init()
@@ -339,3 +408,271 @@ class TestEPaperDriverGhostPrevention:
         args, kwargs = mock_epd.display.call_args
         assert len(args) == 1
         assert "prev_image" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# PERF-1: compute_dirty_bands (pure, hardware-free)
+# ---------------------------------------------------------------------------
+
+
+def _blank() -> bytearray:
+    return bytearray(_BUF_SIZE)
+
+
+def _set_row(buf: bytearray, y: int, byte_val: int = 0xFF) -> None:
+    for c in range(_ROW):
+        buf[y * _ROW + c] = byte_val
+
+
+class TestComputeDirtyBands:
+    def test_no_change_returns_empty(self):
+        old = _blank()
+        bands, changed = compute_dirty_bands(old, bytes(old), HEIGHT, _ROW)
+        assert bands == []
+        assert changed == 0
+
+    def test_two_distant_bands_are_disjoint(self):
+        # A top band (cursor line ~10) and a bottom band (footer ~462) must
+        # produce TWO small windows, not one full-height window (PERF-1 core).
+        old = _blank()
+        new = _blank()
+        for y in (10, 11, 12):
+            _set_row(new, y)
+        for y in (460, 461, 462):
+            _set_row(new, y)
+        bands, changed = compute_dirty_bands(old, new, HEIGHT, _ROW)
+        assert bands == [(10, 13), (460, 463)]
+        assert changed == 6
+        # Not one giant span:
+        assert not any(b[1] - b[0] > 100 for b in bands)
+
+    def test_small_gap_within_threshold_merges(self):
+        # Two changes 20 rows apart (<= default gap 32) coalesce into one band.
+        old = _blank()
+        new = _blank()
+        _set_row(new, 10)
+        _set_row(new, 30)
+        bands, changed = compute_dirty_bands(old, new, HEIGHT, _ROW)
+        assert bands == [(10, 31)]
+        assert changed == 2
+
+    def test_large_gap_splits(self):
+        # Two changes 50 rows apart (> default gap 32) split into two bands.
+        old = _blank()
+        new = _blank()
+        _set_row(new, 10)
+        _set_row(new, 60)
+        bands, changed = compute_dirty_bands(old, new, HEIGHT, _ROW)
+        assert bands == [(10, 11), (60, 61)]
+        assert changed == 2
+
+    def test_custom_gap_argument(self):
+        old = _blank()
+        new = _blank()
+        _set_row(new, 10)
+        _set_row(new, 15)
+        # gap=2 → 5-row separation splits; gap=10 → merges.
+        assert compute_dirty_bands(old, new, HEIGHT, _ROW, gap=2)[0] == [
+            (10, 11), (15, 16)
+        ]
+        assert compute_dirty_bands(old, new, HEIGHT, _ROW, gap=10)[0] == [(10, 16)]
+
+    def test_changed_rows_counts_only_differing_rows_not_span(self):
+        # changed_rows gates the escalation threshold and must NOT include the
+        # unchanged gap rows swallowed by a merged band.
+        old = _blank()
+        new = _blank()
+        _set_row(new, 10)
+        _set_row(new, 30)
+        bands, changed = compute_dirty_bands(old, new, HEIGHT, _ROW)
+        assert bands == [(10, 31)]  # span of 21
+        assert changed == 2  # but only 2 rows actually differ
+
+
+# ---------------------------------------------------------------------------
+# PERF-2: compute_x_window (pure) + windowed slice in display_partial
+# ---------------------------------------------------------------------------
+
+
+class TestComputeXWindow:
+    def test_full_width_row_returns_full_byte_range(self):
+        old = _blank()
+        new = _blank()
+        _set_row(new, 10)
+        assert compute_x_window(old, new, 10, 11, _ROW) == (0, _ROW)
+
+    def test_narrow_change_returns_narrow_byte_range(self):
+        old = _blank()
+        new = _blank()
+        # Change only byte-columns 3 and 4 on row 10.
+        new[10 * _ROW + 3] = 0xFF
+        new[10 * _ROW + 4] = 0xFF
+        assert compute_x_window(old, new, 10, 11, _ROW) == (3, 5)
+
+    def test_window_spans_min_max_across_band_rows(self):
+        old = _blank()
+        new = _blank()
+        new[10 * _ROW + 2] = 0xFF   # left edge on row 10
+        new[11 * _ROW + 7] = 0xFF   # right edge on row 11
+        assert compute_x_window(old, new, 10, 12, _ROW) == (2, 8)
+
+    def test_no_diff_falls_back_to_full_width(self):
+        old = _blank()
+        assert compute_x_window(old, bytes(old), 0, 5, _ROW) == (0, _ROW)
+
+
+class TestDisplayPartialXWindowing:
+    def _epd_black_rect(self, x0_px: int, x1_px: int, rows: list[int]) -> Image.Image:
+        """White image with a black rectangle over [x0_px,x1_px) on given rows."""
+        img = Image.new("1", (WIDTH, HEIGHT), 255)
+        block = Image.new("1", (x1_px - x0_px, 1), 0)
+        for y in rows:
+            img.paste(block, (x0_px, y))
+        return img
+
+    def test_x_window_snapped_to_byte_boundaries(self):
+        # A change at pixels 24..32 → byte-columns 3..4 → Xstart=24, Xend=32.
+        drv, mock_epd = _make_epd_driver()
+        drv.display_partial(self._epd_black_rect(24, 32, [10]))
+        _, xstart, ystart, xend, yend = mock_epd.display_Partial.call_args.args
+        assert xstart == 24
+        assert xend == 32
+        assert (ystart, yend) == (10, 11)
+
+    def test_windowed_slice_length_equals_width_times_height(self):
+        # Slice length must equal (byte-width) * (row-height) of the window.
+        drv, mock_epd = _make_epd_driver()
+        drv.display_partial(self._epd_black_rect(24, 40, [10, 11]))
+        sent = mock_epd.display_Partial.call_args.args[0]
+        _, xstart, ystart, xend, yend = mock_epd.display_Partial.call_args.args
+        byte_width = (xend - xstart) // 8
+        height = yend - ystart
+        assert len(sent) == byte_width * height
+
+    def test_windowed_slice_still_inverted_for_cdi_polarity(self):
+        # The 0xA9 pre-inversion must still apply to the windowed slice: a black
+        # column (getbuffer → 0xFF) becomes 0x00 at the wire.
+        drv, mock_epd = _make_epd_driver()
+        drv.display_partial(self._epd_black_rect(24, 32, [10]))
+        sent = mock_epd.display_Partial.call_args.args[0]
+        assert all(b == 0x00 for b in sent)
+
+    def test_two_bands_issue_two_windowed_partials(self):
+        # A change at the top and at the bottom → two display_Partial calls,
+        # neither spanning the full panel height (PERF-1 on the hardware path).
+        drv, mock_epd = _make_epd_driver()
+        img = _image_with_black_rows([10, 460])
+        drv.display_partial(img)
+        assert mock_epd.display_Partial.call_count == 2
+        for call in mock_epd.display_Partial.call_args_list:
+            _, _, ystart, _, yend = call.args
+            assert yend - ystart <= 2
+
+
+# ---------------------------------------------------------------------------
+# FAULT-6: bounded retry + graceful degradation on display ops
+# ---------------------------------------------------------------------------
+
+
+class TestDisplayOpRetry:
+    """Each hardware display op retries a transient fault, then raises DisplayError."""
+
+    def test_display_full_retries_once_then_succeeds(self):
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        # display() raises the first time, succeeds the second.
+        mock_epd.display.side_effect = [RuntimeError("SPI glitch"), None]
+        drv.display_full(Image.new("1", (WIDTH, HEIGHT), 255))
+        assert mock_epd.display.call_count == 2
+        # The current waveform was re-initialised between tries.
+        mock_epd.init_fast.assert_called()  # re-init on retry (mode == 'fast')
+
+    def test_display_full_raises_after_repeated_failure(self):
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        mock_epd.display.side_effect = RuntimeError("dead panel")
+        with pytest.raises(DisplayError):
+            drv.display_full(Image.new("1", (WIDTH, HEIGHT), 255))
+        # 1 initial + 2 retries = DISPLAY_OP_ATTEMPTS attempts.
+        from writerdeck.display.driver import DISPLAY_OP_ATTEMPTS
+        assert mock_epd.display.call_count == DISPLAY_OP_ATTEMPTS
+
+    def test_display_partial_retries_then_succeeds(self):
+        drv, mock_epd = _make_epd_driver()
+        mock_epd.display_Partial.side_effect = [RuntimeError("crc"), None]
+        drv.display_partial(_image_with_black_rows([10]))
+        assert mock_epd.display_Partial.call_count == 2
+
+    def test_display_partial_raises_after_repeated_failure(self):
+        drv, mock_epd = _make_epd_driver()
+        mock_epd.display_Partial.side_effect = RuntimeError("dead")
+        with pytest.raises(DisplayError):
+            drv.display_partial(_image_with_black_rows([10]))
+
+    def test_display_clean_retries_then_succeeds(self):
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        mock_epd.display.side_effect = [RuntimeError("glitch"), None]
+        drv.display_clean(Image.new("1", (WIDTH, HEIGHT), 255))
+        assert mock_epd.display.call_count == 2
+
+    def test_display_clean_raises_after_repeated_failure(self):
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        mock_epd.display.side_effect = RuntimeError("dead")
+        with pytest.raises(DisplayError):
+            drv.display_clean(Image.new("1", (WIDTH, HEIGHT), 255))
+
+    def test_busy_timeout_treated_as_failure(self):
+        # FAULT-6 policy: a lingering BUSY pin (ReadBusy timeout) is a failed op,
+        # not silently ignored — it must take the retry path.
+        import types
+        from unittest import mock as _mock
+
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        mock_epd.busy_pin = 24
+        fake_cfg = types.ModuleType("epdconfig")
+        # Still busy (0) on the first op, ready (1) on the retry.
+        fake_cfg.digital_read = MagicMock(side_effect=[0, 1])
+        pkg = types.ModuleType("waveshare_epd")
+        pkg.epdconfig = fake_cfg  # so `from waveshare_epd import epdconfig` works
+        # patch.dict restores any pre-existing modules on exit (test_epd_driver
+        # installs a real waveshare_epd.epdconfig), so this doesn't pollute.
+        with _mock.patch.dict(
+            "sys.modules",
+            {"waveshare_epd": pkg, "waveshare_epd.epdconfig": fake_cfg},
+        ):
+            drv.display_full(Image.new("1", (WIDTH, HEIGHT), 255))
+        assert mock_epd.display.call_count == 2  # retried after busy timeout
+
+    def test_busy_timeout_persists_raises(self):
+        import types
+        from unittest import mock as _mock
+
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        mock_epd.busy_pin = 24
+        fake_cfg = types.ModuleType("epdconfig")
+        fake_cfg.digital_read = MagicMock(return_value=0)  # never becomes ready
+        pkg = types.ModuleType("waveshare_epd")
+        pkg.epdconfig = fake_cfg
+        with _mock.patch.dict(
+            "sys.modules",
+            {"waveshare_epd": pkg, "waveshare_epd.epdconfig": fake_cfg},
+        ):
+            with pytest.raises(DisplayError):
+                drv.display_full(Image.new("1", (WIDTH, HEIGHT), 255))
+
+    def test_reinit_between_tries_uses_current_waveform(self):
+        # On a partial-path fault, the retry re-inits the 'part' waveform.
+        drv, mock_epd = _make_epd_driver(mode="part")
+        mock_epd.display_Partial.side_effect = [RuntimeError("glitch"), None]
+        drv.display_partial(_image_with_black_rows([10]))
+        # init_part called once for the initial mode-switch AND again on re-init.
+        assert mock_epd.init_part.call_count >= 1
+        mock_epd.init_fast.assert_not_called()
+
+    def test_null_driver_ops_do_not_raise_display_error(self, tmp_path):
+        # NullDriver has no SPI faults and must not be forced through the retry
+        # path — its ops just work.
+        drv = NullDriver(output_dir=str(tmp_path))
+        drv.init()
+        drv.display_full(_make_image())
+        drv.display_partial(_make_image())
+        # No DisplayError; frames written normally.
+        assert len(list(tmp_path.glob("*.png"))) == 2

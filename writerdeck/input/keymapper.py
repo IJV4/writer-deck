@@ -113,6 +113,16 @@ class KeyMapper:
         self._ctrl_held = False
         self._shift_held = False
 
+    def reset(self) -> None:
+        """Clear all latched modifier state.
+
+        Called when the input source loses track of key releases (evdev
+        disconnect, pygame focus loss) so a modifier held at that moment does
+        not stay "stuck" latched after the source recovers.
+        """
+        self._ctrl_held = False
+        self._shift_held = False
+
     def process_event(self, scancode: int, value: int) -> tuple[KeyAction, str]:
         """Process a raw evdev key event.
 

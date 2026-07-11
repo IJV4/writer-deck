@@ -51,6 +51,9 @@ class PygameDriver:
         logger.info("PygameDriver sleeping")
 
     def close(self) -> None:
+        # Idempotent: safe to call twice (signal handler + atexit).
+        if self._screen is None:
+            return
         pygame.quit()
         self._screen = None
         logger.info("PygameDriver closed")

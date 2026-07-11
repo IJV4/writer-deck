@@ -240,7 +240,6 @@ render_interval_ms: 500             # Display update frequency (ms)
 partial_refresh_max_streak: 20      # Partial refreshes before a full one
 idle_full_refresh_seconds: 10       # Full refresh after N seconds idle
 show_title_bar: true                # Show doc name at top
-use_4gray: false                    # 4-gray grayscale (recommended for screens bought after Oct 2023)
 idle_deep_clean_seconds: 300        # GC16 ghost-clear after N idle seconds (0 = disabled)
 
 # Writing
@@ -338,7 +337,7 @@ The service includes a 120-second watchdog. If the app hangs, systemd restarts i
 | NullDriver | Non-Pi, default | PNGs saved to `/tmp/writer-deck/` |
 | PygameDriver | `keyboard_input: pygame` | Live 800x480 SDL window |
 
-`EPaperDriver` uses four waveform modes: bounding-box partial (~0.3s), fast-full (~1s), 4-gray grayscale (~1.5s), and GC16 deep clean (~3-4s). The app selects the right one automatically based on how much changed and how long the user has been idle.
+`EPaperDriver` uses three waveform modes: bounding-box partial (~0.3s), fast-full (~1s), and GC16 deep clean (~3-4s). The app selects the right one automatically based on how much changed and how long the user has been idle. (A 4-gray grayscale mode was evaluated and removed — it produced stray grey pixels on this hardware.)
 
 ### Input Backends
 
