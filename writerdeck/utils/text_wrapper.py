@@ -119,8 +119,11 @@ def _subline_offsets(line: str, sub_lines: list[str]) -> list[int]:
     return offsets
 
 
-def _text_width(font, text: str) -> float:
-    """Measure text width in pixels.
+_char_width_cache: dict[tuple[int, str], float] = {}
+
+
+def _measure_raw(font, text: str) -> float:
+    """Measure text width via the font's native API, no caching.
 
     Prefers getlength() (width only, ~2x faster than getbbox() on this
     hardware) with a fallback for older Pillow builds that lack it.
@@ -129,6 +132,32 @@ def _text_width(font, text: str) -> float:
     if getlength is not None:
         return float(getlength(text))
     return float(font.getbbox(text)[2])
+
+
+def _text_width(font, text: str) -> float:
+    """Measure text width in pixels.
+
+    Sums per-character widths from a memoized cache instead of calling the
+    font's native measurement API on the whole string each time. On this
+    hardware (Pi Zero 2W) the native call itself costs real per-character
+    time (~0.6-1.2ms) plus a fixed ~2ms overhead per call — measured live
+    on a Pi driving a real ~1300-char paragraph line, re-measuring it (even
+    once, even with an O(n) traversal) still cost multiple seconds. Caching
+    per-character widths turns repeat characters/substrings into O(1) dict
+    lookups. Assumes additive glyph advances (true for this monospace font,
+    no kerning) — the same assumption the wrap algorithms already rely on.
+    """
+    total = 0.0
+    cache = _char_width_cache
+    font_key = id(font)
+    for ch in text:
+        key = (font_key, ch)
+        w = cache.get(key)
+        if w is None:
+            w = _measure_raw(font, ch)
+            cache[key] = w
+        total += w
+    return total
 
 
 def _wrap_single_line(line: str, font, max_width_px: int) -> list[str]:
