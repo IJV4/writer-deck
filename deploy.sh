@@ -75,8 +75,18 @@ RELEASES="$BASE/releases"
 CURRENT="$BASE/current"
 [ -L "$CURRENT" ] || { echo "  ERROR: $CURRENT is not a symlink; cannot roll back." >&2; exit 1; }
 cur="$(basename "$(readlink "$CURRENT")")"
-# Newest release that is not the current one.
-prev="$(ls -1 "$RELEASES" | sort | grep -vxF "$cur" | tail -n1 || true)"
+# Newest release that is not the current one, by the trailing YYYYMMDD-HHMMSS
+# timestamp embedded in the name — NOT a lexical name sort (breaks on the
+# one-time setup.sh release named "setup-<ts>": "s" > "2" sorts it last) and
+# NOT directory mtime (running the app writes __pycache__ into the release
+# dir, which bumps mtime on every restart regardless of how old the release
+# actually is). Every release name, with or without a prefix, ends in exactly
+# 15 characters of YYYYMMDD-HHMMSS, so that suffix alone is the sort key.
+prev="$(
+    ls -1 "$RELEASES" | grep -vxF "$cur" | while IFS= read -r d; do
+        printf '%s %s\n' "${d: -15}" "$d"
+    done | sort | tail -n1 | cut -d' ' -f2-
+)"
 [ -n "$prev" ] || { echo "  ERROR: no previous release to roll back to (only '$cur')." >&2; exit 1; }
 echo "  current: $cur  ->  rolling back to: $prev"
 ln -sfn "$RELEASES/$prev" "$CURRENT.tmp"
@@ -110,7 +120,7 @@ rsync -avz \
     --exclude '.claude' \
     --exclude '__pycache__' \
     --exclude '*.pyc' \
-    --exclude '*.Zone.Identifier' \
+    --exclude '*:Zone.Identifier' \
     --exclude '.venv' \
     --exclude 'venv' \
     --exclude 'releases' \

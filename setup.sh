@@ -152,7 +152,7 @@ if [ "$BOOTSTRAP" -eq 1 ]; then
         --exclude '.claude' \
         --exclude '__pycache__' \
         --exclude '*.pyc' \
-        --exclude '*.Zone.Identifier' \
+        --exclude '*:Zone.Identifier' \
         --exclude '.venv' \
         --exclude 'venv' \
         --exclude 'releases' \
