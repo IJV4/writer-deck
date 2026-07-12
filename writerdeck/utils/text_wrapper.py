@@ -132,27 +132,42 @@ def _text_width(font, text: str) -> float:
 
 
 def _wrap_single_line(line: str, font, max_width_px: int) -> list[str]:
-    """Break a single line at word boundaries to fit within max_width_px."""
+    """Break a single line at word boundaries to fit within max_width_px.
+
+    Tracks the current sub-line's pixel width incrementally instead of
+    re-measuring the whole growing string on every word. The old code called
+    _text_width(current + " " + word) each iteration — O(current length) per
+    word — an O(n^2) pattern over a long paragraph line that measured
+    seconds on real hardware for a several-hundred-character line with many
+    words. Word/space widths are additive (no cross-glyph kerning on this
+    font backend), so summing them matches measuring the concatenation.
+    """
     if _text_width(font, line) <= max_width_px:
         return [line]
 
+    space_width = _text_width(font, " ")
     words = line.split(" ")
     result: list[str] = []
     current = ""
+    current_width = 0.0
 
     for word in words:
-        trial = (current + " " + word) if current else word
-        if _text_width(font, trial) <= max_width_px:
-            current = trial
+        word_width = _text_width(font, word)
+        trial_width = current_width + (space_width + word_width if current else word_width)
+        if trial_width <= max_width_px:
+            current = (current + " " + word) if current else word
+            current_width = trial_width
         else:
             if current:
                 result.append(current)
             # If a single word exceeds width, force-break it
-            if _text_width(font, word) > max_width_px:
+            if word_width > max_width_px:
                 result.extend(_break_word(word, font, max_width_px))
                 current = ""
+                current_width = 0.0
             else:
                 current = word
+                current_width = word_width
 
     if current:
         result.append(current)
