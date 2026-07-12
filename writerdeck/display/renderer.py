@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from PIL import Image, ImageDraw
 
-from writerdeck.display.driver import WIDTH, HEIGHT
+from writerdeck.display.driver import HEIGHT, WIDTH
 from writerdeck.display.fonts import get_font
+from writerdeck.display.glyph_cache import draw_text_cached, text_width_cached
 from writerdeck.modes.base_mode import RenderFrame
 
 
@@ -27,13 +28,13 @@ def render(
     if frame.status_message:
         draw.rectangle([0, 0, WIDTH, 24], fill=0)
         status_font = get_font(font_family, 12)
-        draw.text((8, 4), frame.status_message, font=status_font, fill=255)
+        draw_text_cached(draw, (8, 4), frame.status_message, status_font, fill=255)
         y = max(y, 28)
 
     # Title bar
     elif frame.title:
         title_font = get_font(font_family, 10)
-        draw.text((frame.margin_left, y), frame.title, font=title_font, fill=0)
+        draw_text_cached(draw, (frame.margin_left, y), frame.title, title_font, fill=0)
         draw.line([(frame.margin_left, y + 14), (WIDTH - frame.margin_right, y + 14)], fill=0)
         y += 18
 
@@ -45,7 +46,7 @@ def render(
         if frame.selection is not None:
             _draw_selection_line(draw, frame, font, i, line_text, frame.margin_left, y, line_height)
 
-        draw.text((frame.margin_left, y), line_text, font=font, fill=0)
+        draw_text_cached(draw, (frame.margin_left, y), line_text, font, fill=0)
 
         # Re-draw selected text in white on top of black highlight
         if frame.selection is not None:
@@ -55,8 +56,7 @@ def render(
         if i == frame.cursor_line and frame.show_cursor:
             col = frame.cursor_col
             prefix = line_text[:col]
-            bbox = font.getbbox(prefix) if prefix else (0, 0, 0, 0)
-            cx = frame.margin_left + bbox[2]
+            cx = frame.margin_left + round(text_width_cached(prefix, font) if prefix else 0)
             draw.rectangle(
                 [cx, y, cx + 2, y + line_height],
                 fill=0,
@@ -92,8 +92,8 @@ def _draw_selection_line(
 
     prefix = line_text[:start_col]
     selected = line_text[:end_col]
-    x1 = x + (font.getbbox(prefix)[2] if prefix else 0)
-    x2 = x + (font.getbbox(selected)[2] if selected else 0)
+    x1 = x + round(text_width_cached(prefix, font) if prefix else 0)
+    x2 = x + round(text_width_cached(selected, font) if selected else 0)
     if x2 > x1:
         draw.rectangle([x1, y, x2, y + line_height], fill=0)
 
@@ -122,8 +122,8 @@ def _draw_selected_text(
     sel_text = line_text[start_col:end_col]
     if not sel_text:
         return
-    sx = x + (font.getbbox(prefix)[2] if prefix else 0)
-    draw.text((sx, y), sel_text, font=font, fill=255)
+    sx = x + round(text_width_cached(prefix, font) if prefix else 0)
+    draw_text_cached(draw, (sx, y), sel_text, font, fill=255)
 
 
 def _draw_stats(
@@ -137,7 +137,7 @@ def _draw_stats(
         for key, val in frame.stats.items():
             parts.append(f"{key}: {val}")
         text = "  |  ".join(parts)
-        draw.text((frame.margin_left, y), text, font=small, fill=0)
+        draw_text_cached(draw, (frame.margin_left, y), text, small, fill=0)
 
     elif frame.stats_position == "sidebar":
         x = WIDTH - frame.sidebar_width + 8
@@ -145,6 +145,6 @@ def _draw_stats(
         draw.line([(x - 8, 0), (x - 8, HEIGHT)], fill=0, width=1)
         y = 12
         for key, val in frame.stats.items():
-            draw.text((x, y), str(key), font=small, fill=0)
-            draw.text((x, y + 16), str(val), font=small, fill=0)
+            draw_text_cached(draw, (x, y), str(key), small, fill=0)
+            draw_text_cached(draw, (x, y + 16), str(val), small, fill=0)
             y += 40
