@@ -79,6 +79,44 @@ Mode.render(doc, session) → RenderFrame
 - `NullDriver` — saves PNG frames to `/tmp/writer-deck/` (dev/desktop)
 - `PygameDriver` — renders to a pygame window (set `keyboard_input: pygame`)
 
+#### Glyph cache (`writerdeck/display/glyph_cache.py`)
+
+`renderer.py` draws all text via `draw_text_cached()`/`text_width_cached()`, never `draw.text()`/
+`font.getbbox()` directly. `ImageDraw.text()` pays real FreeType rasterization cost per call
+(measured ~1-2ms/char on a Pi Zero 2W) — PIL does not cache rasterized glyph bitmaps across calls, so
+re-drawing the same characters every frame is not free. The glyph cache rasterizes each distinct
+`(font, character)` once, thresholds the antialiased mask to `"1"` mode (see next paragraph), and
+composites cached bitmaps via `draw.bitmap()` on subsequent draws — measured ~76x faster for a full
+page of text once characters are warm.
+
+**The threshold matters, don't drop it.** `ImageDraw.bitmap()` onto a `"1"`-mode (1-bit) target
+applies a much stricter cutoff to an antialiased `"L"`-mode mask than `draw.text()` does internally —
+without thresholding the mask to `"1"` mode first (`_THRESHOLD = 128` in `glyph_cache.py`), most
+glyph ink is silently dropped (measured: a single glyph's black-pixel count went 25 → 2). This is
+invisible in desktop tests (no pixel-level comparison against real hardware output) and only showed
+up as visibly broken text on the real panel.
+
+#### Text wrapping (`writerdeck/utils/text_wrapper.py`)
+
+`wrap_lines()` caches each wrapped physical line's result in `_wrap_cache` (bounded to 2000 entries,
+cleared on font change via `clear_wrap_cache()`). Within `_wrap_single_line`/`_break_word`,
+`_text_width()` measures width by summing a memoized per-`(font, character)` cache rather than
+calling `font.getlength()`/`getbbox()` on whole (sub)strings — both the character-break and
+word-wrap loops used to grow a trial string and re-measure it from scratch on every character/word
+(an O(n²) pattern), and even after fixing that, `getlength()`'s own real per-call cost on weak
+hardware (Pi Zero 2W: ~2ms fixed + ~0.6-1.2ms/char) still mattered enough to need the memoization.
+This assumes additive glyph advances (no cross-glyph kerning) — true for this monospace font, and the
+same assumption `glyph_cache.py` relies on.
+
+#### Perf instrumentation (`writerdeck/utils/perf.py`)
+
+Opt-in via `enable_perf_metrics: true` in `config.yaml` (must be set on the file the `current/`
+release's `config.yaml` symlink actually resolves to — see the deploy note above, it's easy to edit
+the wrong path). When enabled, `App` wraps `wrap_lines`, `render_frame`, `render_image`, and
+`driver_display` in `perf.time(...)` and logs a `PerfMetrics summary` (p50/p95/max per stage) to the
+log every 30s. This is how the four-layer performance investigation documented in `IMPROVEMENTS.md`
+(2026-07-11 section) was actually diagnosed on real hardware rather than guessed at.
+
 #### Display methods and waveform modes
 
 `EPaperDriver` exposes three display methods, each using a different e-ink waveform:

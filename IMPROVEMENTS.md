@@ -217,3 +217,95 @@ Additionally, **not otherwise re-verified on hardware** by this merge: the inter
 repo's `init_fast()` boot/wake behavior and the imported FAULT-6 retry/re-init logic
 (`_reinit_current_waveform()` re-inits whatever `_mode` currently is, including `"fast"` on
 first-time init) has only been checked with mocked `_epd` in tests, not on a real panel.
+
+## 2026-07-11: perf/fixes merge + first real-hardware verification pass
+
+A second branch, `perf/fixes` (per-line wrap caching, dirty-band diffing groundwork, `PerfMetrics`
+instrumentation, word-count/stats caching, `Document.replace_at` undo/dirty-flag fix), was merged
+into `qa/bugfixes` via the same real-3-way-merge method as the 2026-07-10 round (shared ancestor
+`71eacd2`). Notable merge-time fix: `Document.replace_at`'s BUG-1 fix (only push undo/set dirty on
+an actual match) was combined with perf/fixes' `_invalidate_word_count()` call, keeping the latter
+inside the "did it actually match" guard. `enable_perf_metrics` was in `config_default.yaml` but
+missing from `config.py`'s `_SCHEMA` (pre-existing gap in perf/fixes itself, not introduced by the
+merge) — added.
+
+The result was then deployed to a real Raspberry Pi Zero 2W (`pi@192.168.1.101`) for the **first
+time this repo's OPS-1/OPS-2 machinery has run on real hardware** — this closes out the "hardware
+verify-pending" list from the 2026-07-10 section above:
+- **OPS-1** confirmed working: atomic release/rollback deploy via `deploy.sh`, `current` symlink
+  swap, release pruning. User data (`~/Documents/writer-deck`, `~/.config/writer-deck`) migrated
+  from a prior root-owned ad hoc install to the new `pi`-owned release layout under `~/writer-deck/`.
+- **OPS-2** confirmed working: templated systemd unit installed and running as `pi`.
+- **FAULT-4** confirmed: rebooted the Pi mid-session to clear suspected stale GPIO/watchdog state;
+  service came back up cleanly under the hardware watchdog.
+- Found and fixed live: `config.yaml` wasn't visible to the app under the new release layout, because
+  `config.py` resolves it relative to its own file inside `releases/<ts>/`, and nothing symlinked the
+  persistent `config.yaml` into each new release the way `venv` already was. Fixed by adding the same
+  symlink pattern to both `setup.sh` and `deploy.sh`.
+
+### The real bug: catastrophic per-keystroke latency (75s+), found and fixed in four layers
+
+Manual typing on the device immediately exposed something the entire 2026-07-10 merge and its test
+suite had never caught: every keystroke was taking tens of seconds to render. Desktop tests never
+catch this because `NullDriver`/`PygameDriver` skip all the real hardware/font-rendering cost paths.
+Root-caused via `dmesg` → `strace` → `py-spy dump` (which pinned the main thread inside
+`text_wrapper._break_word`/`font.getbbox`) → direct Python benchmarking on the Pi, after first
+ruling out (and confirming ruled-out, not just assumed) a PiSugar I2C fault and stale GPIO state via
+a full reboot test. Fixed in four separate rounds as each fix exposed the next bottleneck underneath:
+
+1. **`_break_word` O(n²) character-break loop.** Grew a trial string one character at a time,
+   re-measuring the whole growing string from scratch each time. Rewrote as a binary search per
+   segment. A pathological 700-char unbroken run: ~41s → a fraction of a second.
+2. **`_wrap_single_line` O(n²) word-wrap loop.** Same anti-pattern one level up — re-measured the
+   whole growing `current` sub-line via `_text_width(current + " " + word)` on every word. This is
+   what a real ~900-1300-char paragraph *line* (not a single unbroken word) actually hits; #1 alone
+   didn't fix it because that line has spaces. Fixed by tracking width incrementally instead of
+   recomputing the full trial string each word.
+3. **`font.getlength()`'s real per-call cost.** Even with both O(n²) patterns gone, a single
+   ~1300-char real paragraph line still cost ~3.8s to wrap: `getlength()` itself costs ~2ms fixed
+   overhead plus ~0.6-1.2ms/char on this Pi Zero 2W's CPU — genuine FreeType shaping time, not an
+   algorithmic bug. Fixed by memoizing per-`(font, character)` width in `_text_width`, turning
+   repeated characters/substrings into O(1) dict lookups: the same line dropped to ~27ms cold,
+   ~10ms warm.
+4. **`draw.text()`'s real per-call cost in the renderer.** With `wrap_lines` fixed, `PerfMetrics`
+   (enabled via `enable_perf_metrics: true`) showed `render_image` still costing 2.6-3.5s per frame
+   — and, critically, this reproduced on a **fresh, ordinary document**, not just the pathological
+   long-line one, proving it wasn't specific to bad content. `ImageDraw.text()`/`font.getbbox()` pay
+   real FreeType rasterization cost (~1-2ms/char) on every call; PIL does not cache rasterized glyph
+   bitmaps across calls. Added `writerdeck/display/glyph_cache.py`: caches each distinct
+   `(font, character)` glyph's rasterized mask + advance width once, then composites via
+   `draw.bitmap()` for repeats — measured ~76x faster for a full page once characters are warm
+   (2.6s → 0.034s). `renderer.py` now routes every text draw/measurement through
+   `draw_text_cached()`/`text_width_cached()` instead of `draw.text()`/`font.getbbox()`.
+
+**Regression introduced and caught by the same live-hardware testing, same session:** the glyph
+cache's first version passed all 697 desktop tests but visibly broke real rendering — most glyph ink
+was missing on the actual panel. Root cause: `ImageDraw.bitmap()` onto a `"1"`-mode (1-bit) target
+applies a much stricter cutoff to an antialiased `"L"`-mode mask than `draw.text()` does internally
+— measured directly: a single glyph's black-pixel count went from 25 (`draw.text()` reference) to 2
+(raw `L`-mode mask composited via `draw.bitmap()`). This is invisible to desktop tests because they
+don't do pixel-level comparison against real hardware output. Fixed by thresholding each glyph's mask
+to `"1"` mode at the standard midpoint (128) before caching it — verified to within ~0.1% pixel
+difference of `draw.text()`'s own output on a full line of prose, and confirmed visually correct on
+the real panel afterward.
+
+**Net result, measured on the real Pi Zero 2W, cold vs. after all four fixes:**
+
+| Stage | Before | After |
+|---|---|---|
+| `wrap_lines` (real ~1300-char paragraph line) | 8.4s | 4.8-19ms |
+| `render_image` (25 lines of ordinary prose) | 2.6-3.5s | 26-42ms |
+| `total_frame` (typical keystroke) | 4.8-13s+ | ~0.5-1.7s, now dominated by `driver_display` — the
+  physical e-ink panel write itself (~0.3s partial / ~1s full refresh), which is inherent hardware
+  latency, not a software cost. |
+
+**Also fixed per explicit request during this session:** the idle screensaver (`render_paused()` in
+`splash.py`) previously drew a centered "Paused — press any key" hint before blanking; it now blanks
+to pure white with no text at all.
+
+**Not yet tested on hardware, carried forward:** physical typing-feel confirmation across all three
+modes (dashboard, typewriter) beyond distraction_free; `deploy.sh --rollback`/`--list`; FAULT-2/6/7
+(panel-sleep backstop, display-op retry, headless degraded mode) exercised live rather than via
+mocks; PiSugar/battery warning/shutdown thresholds against a real battery. The `Zone.Identifier`
+glob-exclude cosmetic bug in `deploy.sh`/`setup.sh`'s rsync excludes (`*.Zone.Identifier` doesn't
+match `foo.py:Zone.Identifier` — colon, not dot) is still present, harmless, unfixed.
