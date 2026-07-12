@@ -168,6 +168,28 @@ def test_break_word_long_unbroken_run_is_fast_and_correct():
     assert elapsed < 1.0, f"_break_word took {elapsed:.3f}s for a 700-char run"
 
 
+def test_wrap_single_line_long_paragraph_is_fast_and_correct():
+    """A long paragraph line (many words, none individually overlong) must
+    wrap correctly and quickly. _wrap_single_line previously re-measured the
+    whole growing 'current' sub-line on every word — O(n) measurements per
+    line, each itself O(current length) — an O(n^2) pattern that measured
+    several seconds for a ~900-char real paragraph line on a Pi Zero 2W.
+    """
+    import time
+
+    font = get_font("Hack", 14)
+    line = " ".join(["word"] * 180)  # ~900 chars, plenty of word boundaries
+    t0 = time.monotonic()
+    result = _wrap_single_line(line, font, 784)
+    elapsed = time.monotonic() - t0
+
+    assert "".join(result).replace(" ", "") == line.replace(" ", "")
+    assert len(result) > 1
+    for sub in result:
+        assert _text_width(font, sub) <= 784
+    assert elapsed < 1.0, f"_wrap_single_line took {elapsed:.3f}s for a ~900-char paragraph"
+
+
 def test_many_short_words():
     words = " ".join(["hi"] * 50)
     lines, cl, cc, row_map = wrap_lines([words], 0, 0, "Hack", 14, 200)
