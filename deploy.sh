@@ -151,6 +151,21 @@ fi
 ln -sfn "$SHARED_VENV" "$RELEASE/venv.tmp"
 mv -Tf "$RELEASE/venv.tmp" "$RELEASE/venv"
 
+# Symlink the release's config.yaml at the persistent one in $BASE (same reason as
+# venv above): config.py resolves config.yaml relative to its own file inside the
+# release, and this rsync excludes config.yaml (step 2) so a deploy never
+# overwrites the user's config — that only works if every release points back at
+# the same persistent file. Optional: skip if the Pi has no config.yaml yet.
+CONFIG_YAML="$BASE/config.yaml"
+if [ -e "$CONFIG_YAML" ]; then
+    if [ -e "$RELEASE/config.yaml" ] && [ ! -L "$RELEASE/config.yaml" ]; then
+        echo "  ERROR: $RELEASE/config.yaml exists and is not a symlink; refusing to touch it." >&2
+        exit 1
+    fi
+    ln -sfn "$CONFIG_YAML" "$RELEASE/config.yaml.tmp"
+    mv -Tf "$RELEASE/config.yaml.tmp" "$RELEASE/config.yaml"
+fi
+
 # Atomic swap of the `current` symlink (ln to a temp name, then rename over).
 if [ -e "$CURRENT" ] && [ ! -L "$CURRENT" ]; then
     echo "  ERROR: $CURRENT exists and is not a symlink; refusing to swap." >&2
