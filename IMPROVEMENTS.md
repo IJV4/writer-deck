@@ -358,20 +358,37 @@ behavior.
 - Patch fully reverted by redeploying clean code (`./deploy.sh`) — confirmed zero trace of the
   injection helper in the redeployed `driver.py`.
 
-**PiSugar/battery thresholds — blocked on hardware, not software.** `Power.available` requires a
-successful `get battery` response from `pisugar-server`'s Unix socket; on this Pi it returns
-`"battery: I2C not connected"`, which `Power._update()` can't parse, so `available` stays `False`
-and the entire warning/shutdown/UI path silently no-ops regardless of configured thresholds —
-lowering `battery_warning_percent`/`battery_shutdown_percent` would have had no effect. Root cause
-traced to the I2C bus itself: `sudo i2cdetect -y 1` and `-y 2` both come back completely empty (no
-device at any address, not just a missing 0x57), and `pisugar-server`'s own journal shows constant
-`Remote I/O error (os error 121)` / `Operation timed out (os error 110)` trying to reach `addr=87`
-(0x57) — consistent with an open/disconnected line rather than a software misconfiguration (the
-configured address is correct; PiSugar 3 uses 0x57 or 0x68, confirmed against PiSugar's own docs).
-This build wires PiSugar 3 to the Pi with 4 individual wires rather than the pogo-pin mechanical
-connector (see `USER_GUIDE.md`'s new "Wiring Reference" section, added this session after this
-documentation gap caused real time loss during debugging) — wiring was visually re-verified against
-that table and reported correct, but the bus stayed silent. Not resolved this session; needs
-physical checks beyond remote SSH (continuity/multimeter check on the 5V/GND/MDAT/MSCL wires, and
-confirming the PiSugar 3 board's own status LED / internal battery charge, since a PiSugar with no
-power to its own I2C MCU would explain a fully silent bus even with correct external wiring).
+**PiSugar/battery thresholds — root cause found and fixed: a wiring documentation bug, not a
+software bug.** `Power.available` requires a successful `get battery` response from
+`pisugar-server`'s Unix socket; it was returning `"battery: I2C not connected"`, which
+`Power._update()` can't parse, so `available` stayed `False` and the entire warning/shutdown/UI
+path silently no-op'd regardless of configured thresholds. Traced to the I2C bus itself:
+`i2cdetect -y 1`/`-y 2` came back completely empty on both buses, and `pisugar-server`'s journal
+showed constant `Remote I/O error` / `Operation timed out` trying to reach `addr=87` (0x57) — a
+wiring fault, not a software misconfiguration (the address itself was already correct). The
+project's wiring reference (recovered from the user and first committed to `USER_GUIDE.md` this
+session) had the PiSugar 3 pads backwards: it wired **MDAT/MSCL** to the Pi's I2C pins and left
+**SDAT/SSCL** disconnected. Per PiSugar's own docs, MDAT/MSCL is the "I2C main (master) interface,
+no function at this time" — SDAT/SSCL is the "I2C slave interface, connected to Pi's I2C interface"
+i.e. the pair that actually needs to reach the Pi. (An intermediate attempt wired *both* pairs to
+the same two Pi pins, which also left the bus silent — tying MDAT+SDAT together externally through
+the Pi apparently conflicts with something on the PiSugar board itself.) Rewiring to
+SDAT→Pin3(SDA)/SSCL→Pin5(SCL) only (MDAT/MSCL left floating) immediately brought up both `0x57` and
+`0x68` on the bus and real battery data (88%, not charging) through `pisugar-server`. `USER_GUIDE.md`
+corrected to match. With real battery data flowing, both thresholds were then verified live: set
+`battery_warning_percent: 90` (above the real 88%) → `Battery: [****-] 88%` correctly appeared in
+the footer stats; set `battery_shutdown_percent: 90` → after 3 consecutive critical samples (60s
+apart, `SHUTDOWN_DEBOUNCE_SAMPLES`), the app logged `Battery critically low (86%) ... initiating
+shutdown`, autosaved, slept the panel, then issued a real `systemctl poweroff` — the device
+physically powered off and was manually powered back on to confirm clean recovery. Config restored
+to real defaults (15%/3%) afterward.
+
+**Bonus bug found during this test, unrelated to battery:** `keyboard_input: auto` resolves the
+keyboard device once at process startup by scanning `/dev/input/by-id`; if the physical USB
+keyboard is unplugged/replugged (as happened here mid-wiring-work) and hasn't finished
+re-enumerating by the time the app starts, `by-id` has no keyboard entries yet and the resolver
+silently falls back to the first `/dev/input/event*` device — observed picking `vc4-hdmi` (an HDMI
+virtual input) instead, leaving the app completely unresponsive to real keystrokes with no error
+logged. A subsequent restart (once USB had settled) picked the correct device. Not fixed this
+session — tracked as a follow-up to add a retry/re-resolve window (or at least a loud warning) so a
+slow USB re-enumeration doesn't silently strand the device.
