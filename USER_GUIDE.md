@@ -312,11 +312,18 @@ over individual wires. 13 wires total (4 PiSugar + 9 e-Paper HAT).
 |---------------|-------------|------------|------------------------|
 | 5V OUT        | Pin 4       | 5V         | Power delivery         |
 | GND           | Pin 6       | GND        | Ground return           |
-| MDAT          | Pin 3       | GPIO 2 (SDA) | Battery data (I2C)   |
-| MSCL          | Pin 5       | GPIO 3 (SCL) | Battery clock (I2C)  |
+| SDAT          | Pin 3       | GPIO 2 (SDA) | Battery data (I2C)   |
+| SSCL          | Pin 5       | GPIO 3 (SCL) | Battery clock (I2C)  |
 
-SDAT/SSCL (PiSugar's secondary I2C, used for RTC wake) are intentionally **not** connected — Writer
-Deck doesn't use scheduled wake or shutdown-state RTC alarms.
+**Do not connect MDAT/MSCL.** Per PiSugar's own docs, MDAT/MSCL is the "I2C main (master)
+interface, no function at this time" — the pins that actually talk to the Pi are SDAT/SSCL ("I2C
+slave interface, connected to Pi's I2C interface"). An earlier version of this table had these
+swapped (MDAT/MSCL wired, SDAT/SSCL left disconnected), which left the I2C bus completely silent —
+`i2cdetect` showed zero devices on either bus. Confirmed live on 2026-07-12: rewiring to SDAT→Pin
+3/SSCL→Pin 5 immediately brought up both `0x57` and `0x68` on the bus and real battery data through
+`pisugar-server`. If you accidentally wire both pairs (as also happened live — tying MDAT+SDAT to
+the same Pi pin, MSCL+SSCL to the other), the bus stays silent too; only SDAT/SSCL should be
+connected, MDAT/MSCL left floating.
 
 **e-Paper Driver HAT Rev2.3 → Pi Zero 2 W (9 wires):**
 
