@@ -42,6 +42,7 @@ _SCHEMA: dict[str, tuple[tuple[type, ...], tuple[Any, Any] | None]] = {
     "default_format": ((str,), None),
     "idle_deep_clean_seconds": ((int, float), (0, 86400)),
     "sleep_tiers": ((dict,), None),
+    "enable_perf_metrics": ((bool,), None),
 }
 
 
