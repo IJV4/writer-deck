@@ -8,6 +8,7 @@ from writerdeck.utils.text_wrapper import (
     _wrap_single_line,
     _break_word,
     _subline_offsets,
+    _text_width,
     _wrap_cache,
     clear_wrap_cache,
 )
@@ -140,6 +141,31 @@ def test_break_word_single_char_wider_than_max():
     parts = _break_word("W", font, 1)
     assert len(parts) == 1
     assert parts[0] == "W"
+
+
+def test_break_word_long_unbroken_run_is_fast_and_correct():
+    """A pathologically long unbroken word (no spaces) must wrap correctly
+    and quickly. _break_word previously grew a trial string one character at
+    a time, re-measuring it from scratch each time — O(n) measurements per
+    line, each itself O(current length), an O(n^2) pattern that measured
+    tens of seconds for a ~650-char run on real (slow) hardware. The
+    binary-search rewrite must still produce every character, in order, with
+    no segment exceeding max_width_px, well within a fraction of a second on
+    any hardware.
+    """
+    import time
+
+    font = get_font("Hack", 14)
+    word = "d" * 700
+    t0 = time.monotonic()
+    parts = _break_word(word, font, 784)
+    elapsed = time.monotonic() - t0
+
+    assert "".join(parts) == word
+    assert len(parts) > 1
+    for part in parts:
+        assert _text_width(font, part) <= 784
+    assert elapsed < 1.0, f"_break_word took {elapsed:.3f}s for a 700-char run"
 
 
 def test_many_short_words():

@@ -119,10 +119,21 @@ def _subline_offsets(line: str, sub_lines: list[str]) -> list[int]:
     return offsets
 
 
+def _text_width(font, text: str) -> float:
+    """Measure text width in pixels.
+
+    Prefers getlength() (width only, ~2x faster than getbbox() on this
+    hardware) with a fallback for older Pillow builds that lack it.
+    """
+    getlength = getattr(font, "getlength", None)
+    if getlength is not None:
+        return float(getlength(text))
+    return float(font.getbbox(text)[2])
+
+
 def _wrap_single_line(line: str, font, max_width_px: int) -> list[str]:
     """Break a single line at word boundaries to fit within max_width_px."""
-    bbox = font.getbbox(line)
-    if bbox[2] <= max_width_px:
+    if _text_width(font, line) <= max_width_px:
         return [line]
 
     words = line.split(" ")
@@ -131,14 +142,13 @@ def _wrap_single_line(line: str, font, max_width_px: int) -> list[str]:
 
     for word in words:
         trial = (current + " " + word) if current else word
-        bbox = font.getbbox(trial)
-        if bbox[2] <= max_width_px:
+        if _text_width(font, trial) <= max_width_px:
             current = trial
         else:
             if current:
                 result.append(current)
             # If a single word exceeds width, force-break it
-            if font.getbbox(word)[2] > max_width_px:
+            if _text_width(font, word) > max_width_px:
                 result.extend(_break_word(word, font, max_width_px))
                 current = ""
             else:
@@ -151,16 +161,25 @@ def _wrap_single_line(line: str, font, max_width_px: int) -> list[str]:
 
 
 def _break_word(word: str, font, max_width_px: int) -> list[str]:
-    """Character-level break for words wider than max_width_px."""
+    """Character-level break for words wider than max_width_px.
+
+    Binary-searches each segment's fit point (O(log n) width measurements per
+    segment) instead of growing a trial string one character at a time. The
+    old approach did O(n) measurements per segment, each itself costing
+    O(current length) on this font backend — an O(n^2) pattern overall that
+    measured ~41s for a single ~650-character unbroken run on a Pi Zero 2W.
+    """
     parts: list[str] = []
-    current = ""
-    for ch in word:
-        trial = current + ch
-        if font.getbbox(trial)[2] > max_width_px and current:
-            parts.append(current)
-            current = ch
-        else:
-            current = trial
-    if current:
-        parts.append(current)
+    n = len(word)
+    start = 0
+    while start < n:
+        lo, hi = start + 1, n  # lo..hi: candidate end positions, at least 1 char
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if _text_width(font, word[start:mid]) <= max_width_px:
+                lo = mid
+            else:
+                hi = mid - 1
+        parts.append(word[start:lo])
+        start = lo
     return parts
