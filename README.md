@@ -12,7 +12,7 @@ No notifications. No browser. Just writing.
 |-----------|-------|
 | Computer | Raspberry Pi Zero 2 W |
 | Display | Waveshare 7.5" e-Paper HAT V2 (800×480, B&W) |
-| Battery | PiSugar 3 (5000 mAh) |
+| Battery | PiSugar 3 Plus (5000 mAh) |
 | Input | Any USB HID keyboard |
 
 The Pi runs headlessly as a systemd service. The e-ink display retains its image with the power off, making it ideal for a low-power writing appliance.
@@ -29,7 +29,7 @@ The Pi runs headlessly as a systemd service. The e-ink display retains its image
 - **Find / Replace** — search and replace within the current document
 - **Font picker** — switch system fonts at runtime
 - **USB export** — Ctrl+E copies all documents to a plugged-in USB drive
-- **Battery monitoring** — PiSugar 3 level and estimated remaining time in the Dashboard
+- **Battery monitoring** — PiSugar 3 Plus level and estimated remaining time in the Dashboard
 
 ---
 

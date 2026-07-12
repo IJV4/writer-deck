@@ -196,7 +196,7 @@ The status bar shows "Found at line N" or "Not found".
 
 ## Power Management
 
-Requires a PiSugar 3 battery board. Enable in config with `enable_battery_monitor: true`.
+Requires a PiSugar 3 Plus battery board. Enable in config with `enable_battery_monitor: true`.
 
 ### Battery Monitoring
 
@@ -295,20 +295,20 @@ sleep_tiers:
 
 - Raspberry Pi Zero 2 W (512 MB RAM)
 - Waveshare 7.5" e-Paper HAT V2 (800x480, 1-bit B&W, SPI)
-- PiSugar 3 (5000 mAh, POGO pin connection)
+- PiSugar 3 Plus (5000 mAh, POGO pin connection)
 - Any USB HID keyboard
 - 16 GB+ microSD with Raspberry Pi OS Bookworm Lite
 
 ### Wiring Reference
 
-This build does **not** stack the e-Paper HAT or PiSugar 3 directly on the Pi's GPIO header.
-PiSugar 3, its PCB, and the Pi Zero 2 W sit side-by-side (no stacking) behind the keyboard; the
+This build does **not** stack the e-Paper HAT or PiSugar 3 Plus directly on the Pi's GPIO header.
+PiSugar 3 Plus, its PCB, and the Pi Zero 2 W sit side-by-side (no stacking) behind the keyboard; the
 e-Paper driver HAT + panel live separately (e.g. in the clamshell lid) and connect back to the Pi
 over individual wires. 13 wires total (4 PiSugar + 9 e-Paper HAT).
 
-**PiSugar 3 PCB → Pi Zero 2 W (4 wires):**
+**PiSugar 3 Plus PCB → Pi Zero 2 W (4 wires):**
 
-| PiSugar 3 Pad | Pi Zero Pin | GPIO       | Purpose               |
+| PiSugar 3 Plus Pad | Pi Zero Pin | GPIO       | Purpose               |
 |---------------|-------------|------------|------------------------|
 | 5V OUT        | Pin 4       | 5V         | Power delivery         |
 | GND           | Pin 6       | GND        | Ground return           |

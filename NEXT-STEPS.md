@@ -47,25 +47,25 @@ The device uses a 60% keyboard (no function row, no dedicated navigation keys). 
 
 ### 3D Case
 
-Actual build does **not** stack the e-Paper HAT or PiSugar 3 on the Pi's GPIO header — see
+Actual build does **not** stack the e-Paper HAT or PiSugar 3 Plus on the Pi's GPIO header — see
 `USER_GUIDE.md`'s "Wiring Reference" for the real layout (individual wires, no stacking):
-PiSugar 3 PCB + Pi Zero 2 W sit side-by-side behind the keyboard; the e-Paper driver HAT + panel are
+PiSugar 3 Plus PCB + Pi Zero 2 W sit side-by-side behind the keyboard; the e-Paper driver HAT + panel are
 mounted separately (e.g. in the clamshell lid) and wired back with 9 individual wires.
 
-- [ ] Measure the side-by-side PiSugar 3 + Pi Zero 2 W footprint for the keyboard compartment
+- [ ] Measure the side-by-side PiSugar 3 Plus + Pi Zero 2 W footprint for the keyboard compartment
 - [ ] Measure the separately-mounted e-Paper HAT PCB (~170mm × 111mm) for the lid compartment
 - [ ] Plan wire routing/slack between the two compartments (13 wires total: 4 PiSugar + 9 HAT) —
       the hinge/fold point if it's a clamshell needs enough slack not to strain solder joints
 - [ ] USB connector type on your keyboard (for port cutout)
 - [ ] Design a two-part friction-fit or M2.5 screwed enclosure (FreeCAD or Fusion 360)
   - Lid: display window cutout (163mm × 98mm + 0.2mm tolerance) over the e-Paper panel
-  - Base: PiSugar 3 + Pi Zero + keyboard compartment, port cutouts (USB-C charge, USB keyboard,
+  - Base: PiSugar 3 Plus + Pi Zero + keyboard compartment, port cutouts (USB-C charge, USB keyboard,
     micro-SD)
   - Material: PETG, 2-3mm walls
 
 ### Battery Life Testing
 
-- Time a full writing session on PiSugar 3 (expect 4-5 hours)
+- Time a full writing session on PiSugar 3 Plus (expect 4-5 hours)
 - Tweak `display_sleep_minutes` for optimal balance
 
 ---
