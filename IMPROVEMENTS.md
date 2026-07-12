@@ -200,18 +200,18 @@ three test fixes above). `ruff check .` → 80 errors (pre-merge baseline on thi
 new errors, net improvement). `mypy writerdeck/` → 23 errors (same as pre-merge baseline, no
 change). Desktop smoke test (`python main.py`) starts and shuts down cleanly.
 
-**Still hardware-verify-pending — not verified on this repo's actual Pi/panel, carried over from the
-imported round's own "hardware-verify-pending" list (see CHANGELOG-IMPROVEMENTS.md §8):**
-- **FAULT-2** — `systemctl stop writer-deck` should deep-sleep the panel via `ExecStopPost` even on
-  crash/kill (`tools/epd_sleep.py`). Only syntax/import-checked on desktop.
-- **FAULT-4** — `setup.sh`'s bcm2835 hardware watchdog (`dtparam=watchdog=on` +
-  `RuntimeWatchdogSec=14`) should force a reboot on a kernel hang. Cannot be exercised off-Pi.
-- **OPS-1** — the atomic release/rollback deploy (`releases/<ts>/`, `current` symlink swap, prune to
-  5, `--rollback`/`--list`) has not been run against a real Pi over SSH.
-- **OPS-2** — the templated systemd unit (`__USER__`/`__WORKDIR__`/`__VENV__` substitution via
-  `setup.sh`) has not been installed and started on real hardware.
+**Hardware-verify-pending at merge time, since resolved** — carried over from the imported round's
+own "hardware-verify-pending" list (see CHANGELOG-IMPROVEMENTS.md §8). All since confirmed on real
+hardware; see the "2026-07-11" and "2026-07-12" sections below for how:
+- **FAULT-2** — confirmed (2026-07-11 real deploy; re-verified via SIGKILL crash simulation
+  2026-07-12): `ExecStopPost` deep-sleeps the panel even on crash/kill.
+- **FAULT-4** — confirmed 2026-07-11: rebooted the Pi mid-session, hardware watchdog/service came
+  back up cleanly.
+- **OPS-1** — confirmed 2026-07-11 (first real deploy) and 2026-07-12 (rollback/list exercised
+  live, which found and fixed a real release-selection bug — see below).
+- **OPS-2** — confirmed 2026-07-11: templated systemd unit installed and running as `pi`.
 - **LONG-4** — intentionally skipped in the original round (no cheap temperature source); still
-  skipped here.
+  skipped, not a hardware-verify gap.
 
 Additionally, **not otherwise re-verified on hardware** by this merge: the interaction between this
 repo's `init_fast()` boot/wake behavior and the imported FAULT-6 retry/re-init logic
@@ -303,12 +303,13 @@ the real panel afterward.
 `splash.py`) previously drew a centered "Paused — press any key" hint before blanking; it now blanks
 to pure white with no text at all.
 
-**Not yet tested on hardware, carried forward:** physical typing-feel confirmation across all three
-modes (dashboard, typewriter) beyond distraction_free; `deploy.sh --rollback`/`--list`; FAULT-2/6/7
-(panel-sleep backstop, display-op retry, headless degraded mode) exercised live rather than via
-mocks; PiSugar/battery warning/shutdown thresholds against a real battery. The `Zone.Identifier`
+**Not yet tested on hardware at the time this section was written — all since resolved in the
+2026-07-12 QA round below:** physical typing-feel confirmation across all three modes (dashboard,
+typewriter) beyond distraction_free; `deploy.sh --rollback`/`--list`; FAULT-2/6/7 (panel-sleep
+backstop, display-op retry, headless degraded mode) exercised live rather than via mocks;
+PiSugar/battery warning/shutdown thresholds against a real battery. The `Zone.Identifier`
 glob-exclude cosmetic bug in `deploy.sh`/`setup.sh`'s rsync excludes (`*.Zone.Identifier` doesn't
-match `foo.py:Zone.Identifier` — colon, not dot) is still present, harmless, unfixed.
+match `foo.py:Zone.Identifier` — colon, not dot) was also fixed in that round.
 
 ## 2026-07-12: QA round on the deployed qa/bugfixes build
 

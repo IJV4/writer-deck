@@ -29,6 +29,11 @@ The device uses a 60% keyboard (no function row, no dedicated navigation keys). 
 - **Home / End** — verify these are accessible without a function layer
 - **Function key alternatives** — consider Fn+layer combos for missing keys
 - Review `writerdeck/input/keymapper.py` for any gaps in the current keymap
+- **`keyboard_input: auto` startup race** — found live 2026-07-12: device resolution runs once at
+  startup via `/dev/input/by-id`; if the USB keyboard hasn't finished re-enumerating yet (e.g. right
+  after a replug), it silently falls back to the first `/dev/input/event*` device instead of the
+  real keyboard, with no error logged. Needs a retry/re-resolve window or a loud warning on
+  fallback. See `writerdeck/input/keyboard.py::_resolve_device`.
 
 ### File Management Improvements
 
@@ -42,13 +47,21 @@ The device uses a 60% keyboard (no function row, no dedicated navigation keys). 
 
 ### 3D Case
 
-- [ ] Measure assembled stack: Waveshare HAT PCB (~170mm × 111mm), Pi Zero + PiSugar stacked height
-- [ ] SPI ribbon/connector clearance
+Actual build does **not** stack the e-Paper HAT or PiSugar 3 on the Pi's GPIO header — see
+`USER_GUIDE.md`'s "Wiring Reference" for the real layout (individual wires, no stacking):
+PiSugar 3 PCB + Pi Zero 2 W sit side-by-side behind the keyboard; the e-Paper driver HAT + panel are
+mounted separately (e.g. in the clamshell lid) and wired back with 9 individual wires.
+
+- [ ] Measure the side-by-side PiSugar 3 + Pi Zero 2 W footprint for the keyboard compartment
+- [ ] Measure the separately-mounted e-Paper HAT PCB (~170mm × 111mm) for the lid compartment
+- [ ] Plan wire routing/slack between the two compartments (13 wires total: 4 PiSugar + 9 HAT) —
+      the hinge/fold point if it's a clamshell needs enough slack not to strain solder joints
 - [ ] USB connector type on your keyboard (for port cutout)
-- [ ] Design two-part friction-fit or M2.5 screwed enclosure (FreeCAD or Fusion 360)
-  - Front: display window cutout (163mm × 98mm + 0.2mm tolerance)
-  - Back: component compartments, port cutouts (USB-C charge, USB keyboard, micro-SD)
-  - Material: PETG, 2-3mm walls, ~175mm × 115mm × 20-25mm total
+- [ ] Design a two-part friction-fit or M2.5 screwed enclosure (FreeCAD or Fusion 360)
+  - Lid: display window cutout (163mm × 98mm + 0.2mm tolerance) over the e-Paper panel
+  - Base: PiSugar 3 + Pi Zero + keyboard compartment, port cutouts (USB-C charge, USB keyboard,
+    micro-SD)
+  - Material: PETG, 2-3mm walls
 
 ### Battery Life Testing
 
