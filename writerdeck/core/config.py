@@ -184,6 +184,10 @@ class Config:
             "system_suspend_minutes": 30,
         })
 
+    @property
+    def enable_perf_metrics(self) -> bool:
+        return bool(self._data.get("enable_perf_metrics", False))
+
     def get(self, key: str, default: Any = None) -> Any:
         return self._data.get(key, default)
 

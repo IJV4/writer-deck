@@ -30,7 +30,7 @@ class TypewriterMode(BaseMode):
 
     def render(self, doc: Document, session: Session) -> RenderFrame:
         wrapped, cursor_line, cursor_col, row_map = wrap_lines(
-            doc.lines, doc.cursor_line, doc.cursor_col,
+            doc._lines, doc.cursor_line, doc.cursor_col,
             self._font_family, self._font_size, self._text_width_px,
         )
         self._wrapped_lines = wrapped
@@ -65,9 +65,9 @@ class TypewriterMode(BaseMode):
 
         # Force full refresh on newline (feels like a typewriter carriage return)
         force_full = (
-            len(doc.lines) > 1
+            doc.line_count > 1
             and doc.cursor_col == 0
-            and doc.cursor_line == len(doc.lines) - 1
+            and doc.cursor_line == doc.line_count - 1
         )
 
         stats = {"Words": str(doc.word_count), "Page": f"{page + 1}/{total}"}

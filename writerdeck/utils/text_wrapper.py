@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 from writerdeck.display.fonts import get_font
+from writerdeck.utils.perf import get_perf
+
+_wrap_cache: dict[tuple[str, str, int, int], list[str]] = {}
+
+
+def clear_wrap_cache() -> None:
+    """Clear the per-line wrap cache."""
+    _wrap_cache.clear()
 
 
 def wrap_lines(
@@ -22,35 +30,43 @@ def wrap_lines(
         Use row_map for visual up/down navigation.
     """
     font = get_font(font_family, font_size)
-    wrapped: list[str] = []
-    row_map: list[tuple[int, int]] = []
-    new_cursor_line = 0
-    new_cursor_col = cursor_col
 
-    for line_idx, line in enumerate(doc_lines):
-        if not line:
+    with get_perf().time("wrap_lines"):
+        wrapped: list[str] = []
+        row_map: list[tuple[int, int]] = []
+        new_cursor_line = 0
+        new_cursor_col = cursor_col
+
+        for line_idx, line in enumerate(doc_lines):
+            if not line:
+                if line_idx == cursor_line:
+                    new_cursor_line = len(wrapped)
+                    new_cursor_col = 0
+                row_map.append((line_idx, 0))
+                wrapped.append("")
+                continue
+
+            cache_key = (line, font_family, font_size, max_width_px)
+            sub_lines = _wrap_cache.get(cache_key)
+            if sub_lines is None:
+                if len(_wrap_cache) >= 2000:
+                    _wrap_cache.clear()
+                sub_lines = _wrap_single_line(line, font, max_width_px)
+                _wrap_cache[cache_key] = sub_lines
+            offsets = _subline_offsets(line, sub_lines)
+
             if line_idx == cursor_line:
-                new_cursor_line = len(wrapped)
-                new_cursor_col = 0
-            row_map.append((line_idx, 0))
-            wrapped.append("")
-            continue
+                # Find which sub-line the cursor falls in using real char offsets
+                for i, (sub, start) in enumerate(zip(sub_lines, offsets)):
+                    end = start + len(sub)
+                    if cursor_col <= end or i == len(sub_lines) - 1:
+                        new_cursor_line = len(wrapped) + i
+                        new_cursor_col = cursor_col - start
+                        break
 
-        sub_lines = _wrap_single_line(line, font, max_width_px)
-        offsets = _subline_offsets(line, sub_lines)
-
-        if line_idx == cursor_line:
-            # Find which sub-line the cursor falls in using real char offsets
-            for i, (sub, start) in enumerate(zip(sub_lines, offsets)):
-                end = start + len(sub)
-                if cursor_col <= end or i == len(sub_lines) - 1:
-                    new_cursor_line = len(wrapped) + i
-                    new_cursor_col = cursor_col - start
-                    break
-
-        for sub, start in zip(sub_lines, offsets):
-            row_map.append((line_idx, start))
-            wrapped.append(sub)
+            for sub, start in zip(sub_lines, offsets):
+                row_map.append((line_idx, start))
+                wrapped.append(sub)
 
     return wrapped, new_cursor_line, new_cursor_col, row_map
 

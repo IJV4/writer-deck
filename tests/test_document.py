@@ -705,3 +705,45 @@ class TestFindReplace:
         doc = Document("aaa\nbbb")
         pos = doc.find_next("bbb", 0, 0)
         assert pos == (1, 0)
+
+
+class TestWordCountCache:
+    def test_word_count_cached_after_access(self):
+        doc = Document("hello world")
+        first = doc.word_count
+        assert doc._word_count_dirty is False
+        second = doc.word_count
+        assert first == second == 2
+        assert doc._word_count_dirty is False
+
+    def test_word_count_invalidated_on_insert(self):
+        doc = Document("hello")
+        _ = doc.word_count  # populate cache
+        assert doc._word_count_dirty is False
+        doc.insert(" world")
+        assert doc._word_count_dirty is True
+        assert doc.word_count == 2
+
+    def test_word_count_invalidated_on_delete(self):
+        doc = Document("hello world")
+        _ = doc.word_count
+        assert doc._word_count_dirty is False
+        doc.delete_backward()
+        assert doc._word_count_dirty is True
+
+    def test_word_count_invalidated_on_undo(self):
+        doc = Document()
+        doc.insert("hello")
+        _ = doc.word_count
+        assert doc._word_count_dirty is False
+        doc.undo()
+        assert doc._word_count_dirty is True
+
+    def test_redo_stack_bounded(self):
+        doc = Document()
+        # Do 101 inserts then undo them all — fills redo stack beyond 100
+        for _i in range(101):
+            doc.insert("a")
+        for _i in range(101):
+            doc.undo()
+        assert len(doc._redo_stack) <= 100

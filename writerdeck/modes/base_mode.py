@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -101,13 +102,12 @@ class BaseMode(ABC):
         When a doc line wraps to multiple visual rows, picks the row whose
         char_start is <= doc_col (the deepest match).
         """
-        best = 0
-        for i, (dl, start) in enumerate(self._row_map):
-            if dl > doc_line:
-                break
-            if dl == doc_line and start <= doc_col:
-                best = i
-        return best
+        # _row_map is sorted by (doc_line, col_start). Find rightmost row
+        # where (dl, start) <= (doc_line, doc_col).
+        idx = bisect.bisect_right(self._row_map, (doc_line, doc_col))
+        # bisect_right gives insertion point after all (doc_line, <= doc_col) entries.
+        # Step back one to get the row whose start <= doc_col.
+        return max(0, idx - 1)
 
     def _visual_move(self, doc: Document, delta: int, extend: bool) -> bool:
         """Move the cursor one visual row up (delta=-1) or down (delta=+1).

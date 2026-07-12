@@ -38,7 +38,7 @@ class DashboardMode(BaseMode):
 
     def render(self, doc: Document, session: Session) -> RenderFrame:
         wrapped, cursor_line, cursor_col, row_map = wrap_lines(
-            doc.lines, doc.cursor_line, doc.cursor_col,
+            doc._lines, doc.cursor_line, doc.cursor_col,
             self._font_family, self._font_size, _TEXT_WIDTH_PX,
         )
         self._wrapped_lines = wrapped

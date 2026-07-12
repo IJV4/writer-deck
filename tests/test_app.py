@@ -453,13 +453,15 @@ class TestSleepTiers:
 
 
 class TestWatchdog:
-    def _make_app(self, tmp_path):
+    def _make_app(self, tmp_path, notify_socket=None):
         from writerdeck.utils.platform import HardwareProfile
         from writerdeck.core.app import App
 
+        env = {"NOTIFY_SOCKET": notify_socket} if notify_socket else {}
         with patch("writerdeck.core.app.get_config") as mc, \
              patch("writerdeck.core.app.detect_platform") as mp, \
-             patch("writerdeck.core.app.create_driver") as md:
+             patch("writerdeck.core.app.create_driver") as md, \
+             patch.dict(os.environ, env, clear=(notify_socket is None)):
             mc.return_value = _make_config({"documents_dir": str(tmp_path)})
             mp.return_value = HardwareProfile(
                 name="desktop", is_pi=False, is_pi_zero=False,
@@ -469,32 +471,29 @@ class TestWatchdog:
             return App()
 
     def test_no_socket_is_noop(self, tmp_path):
+        # App created without NOTIFY_SOCKET — _watchdog_sock is None
         app = self._make_app(tmp_path)
-        with patch.dict(os.environ, {}, clear=True):
-            # Should not raise
-            app._notify_watchdog()
+        app._notify_watchdog()  # should not raise
 
-    @patch("socket.socket")
+    @patch("writerdeck.core.app.socket.socket")
     def test_sends_watchdog_signal(self, mock_socket_cls, tmp_path):
-        app = self._make_app(tmp_path)
+        # Mock must be active when App.__init__ runs (socket created there now)
         mock_sock = MagicMock()
         mock_socket_cls.return_value = mock_sock
-        with patch.dict(os.environ, {"NOTIFY_SOCKET": "/run/systemd/notify"}):
-            app._notify_watchdog()
+        app = self._make_app(tmp_path, notify_socket="/run/systemd/notify")
+        app._notify_watchdog()
         mock_sock.sendto.assert_called_once_with(
             b"WATCHDOG=1", "/run/systemd/notify"
         )
-        mock_sock.close.assert_called_once()
 
-    @patch("socket.socket")
+    @patch("writerdeck.core.app.socket.socket")
     def test_abstract_socket(self, mock_socket_cls, tmp_path):
-        app = self._make_app(tmp_path)
         mock_sock = MagicMock()
         mock_socket_cls.return_value = mock_sock
-        with patch.dict(os.environ, {"NOTIFY_SOCKET": "@/run/systemd/notify"}):
-            app._notify_watchdog()
+        app = self._make_app(tmp_path, notify_socket="@/run/systemd/notify")
+        app._notify_watchdog()
         mock_sock.sendto.assert_called_once_with(
-            b"WATCHDOG=1", "\0/run/systemd/notify"
+            b"WATCHDOG=1", "\x00/run/systemd/notify"
         )
 
 

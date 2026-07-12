@@ -370,3 +370,30 @@ class TestMidnightAttribution:
         with patch("writerdeck.core.session.date", _FakeDate([day2, day2, day2])):
             progress = s.goal_progress(30)
         assert progress == 10 / 500
+
+
+class TestLedgerCache:
+    """Ledger reads are cached with a 30s TTL to avoid disk I/O per render."""
+
+    def test_load_ledger_cached_within_ttl(self, tmp_path):
+        ledger_path = tmp_path / "daily.json"
+        ledger_path.write_text('{"2026-01-01": 42}')
+        s = Session()
+        s._ledger_path = ledger_path
+        # First call reads from disk and populates cache
+        result1 = s._load_ledger()
+        assert result1 == {"2026-01-01": 42}
+        assert s._ledger_cache is not None
+        assert s._ledger_cache_time > 0
+        # Second call within TTL should return cached value without reading disk
+        with patch("builtins.open", side_effect=OSError("should not read disk")):
+            result2 = s._load_ledger()
+        assert result2 == {"2026-01-01": 42}
+
+    def test_save_ledger_updates_cache(self, tmp_path):
+        ledger_path = tmp_path / "daily.json"
+        s = Session()
+        s._ledger_path = ledger_path
+        s._save_ledger({"2026-01-01": 100})
+        assert s._ledger_cache == {"2026-01-01": 100}
+        assert s._ledger_cache_time > 0

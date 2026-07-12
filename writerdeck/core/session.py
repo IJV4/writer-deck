@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 class Session:
-    def __init__(self, daily_goal: int = 500) -> None:
+    def __init__(self, daily_goal: int = 500) -> None:  # noqa: D107
         self.daily_goal = daily_goal
         self._start_time = time.monotonic()
         self._start_word_count = 0
@@ -23,6 +23,8 @@ class Session:
         self._ledger_path = (
             Path("~/.config/writer-deck/daily.json").expanduser()
         )
+        self._ledger_cache: dict | None = None
+        self._ledger_cache_time: float = 0.0
 
     def start(self, current_word_count: int) -> None:
         self._start_time = time.monotonic()
@@ -83,10 +85,17 @@ class Session:
     # -- Daily ledger persistence ------------------------------------------
 
     def _load_ledger(self) -> dict:
+        now = time.monotonic()
+        if self._ledger_cache is not None and now - self._ledger_cache_time < 30.0:
+            return self._ledger_cache
         if self._ledger_path.exists():
             with open(self._ledger_path) as f:
-                return json.load(f)
-        return {}
+                result = json.load(f)
+        else:
+            result = {}
+        self._ledger_cache = result
+        self._ledger_cache_time = now
+        return result
 
     def _save_ledger(self, ledger: dict) -> None:
         self._ledger_path.parent.mkdir(parents=True, exist_ok=True)
@@ -102,6 +111,8 @@ class Session:
             os.close(fd)
             fd = -1
             os.rename(tmp_path, str(self._ledger_path))
+            self._ledger_cache = ledger
+            self._ledger_cache_time = time.monotonic()
         except Exception:
             if fd >= 0:
                 try:
