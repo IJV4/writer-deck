@@ -179,6 +179,22 @@ fi
 ln -sfn "$SHARED_VENV" "$RELEASE_DIR/venv.tmp"
 mv -Tf "$RELEASE_DIR/venv.tmp" "$RELEASE_DIR/venv"
 
+# Symlink the release's config.yaml at the persistent one in $BASE_DIR (same idea
+# as venv above). config.py resolves config.yaml relative to its own file inside
+# the release, so without this symlink a release can never see the user's config —
+# deploy.sh deliberately excludes config.yaml from the rsync so a deploy never
+# overwrites it, which only works if each release points back at the same file.
+# Optional: a fresh install may not have a config.yaml yet (config_default.yaml
+# alone is a valid config), so only symlink if one exists.
+if [ -e "$BASE_DIR/config.yaml" ]; then
+    if [ -e "$RELEASE_DIR/config.yaml" ] && [ ! -L "$RELEASE_DIR/config.yaml" ]; then
+        echo "  ERROR: $RELEASE_DIR/config.yaml exists and is not a symlink; refusing to touch it."
+        exit 1
+    fi
+    ln -sfn "$BASE_DIR/config.yaml" "$RELEASE_DIR/config.yaml.tmp"
+    mv -Tf "$RELEASE_DIR/config.yaml.tmp" "$RELEASE_DIR/config.yaml"
+fi
+
 # OPS-1: point the `current` symlink at this release, so the rendered unit (which
 # references $CURRENT_LINK) resolves to real code + venv. Atomic replace: build a
 # temp symlink then rename over `current`. `current` is only ever a symlink here —
