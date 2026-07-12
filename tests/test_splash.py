@@ -25,16 +25,8 @@ class TestPaused:
         img = render_paused()
         assert img.mode == "1"
 
-    def test_render_paused_is_mostly_white(self):
-        # A retention-mitigation frame must be overwhelmingly white (few black
-        # pixels — just the small centered hint).
+    def test_render_paused_is_fully_blank(self):
+        # No message is drawn — the panel goes fully white, no ink at all.
         img = render_paused()
         black = sum(1 for px in img.getdata() if px == 0)
-        total = WIDTH * HEIGHT
-        assert black / total < 0.02  # < 2% ink
-
-    def test_render_paused_has_some_ink(self):
-        # It should still show the hint (not a fully blank frame).
-        img = render_paused()
-        black = sum(1 for px in img.getdata() if px == 0)
-        assert black > 0
+        assert black == 0
