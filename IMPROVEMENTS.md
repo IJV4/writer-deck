@@ -309,3 +309,69 @@ modes (dashboard, typewriter) beyond distraction_free; `deploy.sh --rollback`/`-
 mocks; PiSugar/battery warning/shutdown thresholds against a real battery. The `Zone.Identifier`
 glob-exclude cosmetic bug in `deploy.sh`/`setup.sh`'s rsync excludes (`*.Zone.Identifier` doesn't
 match `foo.py:Zone.Identifier` — colon, not dot) is still present, harmless, unfixed.
+
+## 2026-07-12: QA round on the deployed qa/bugfixes build
+
+Systematic hardware QA of everything landed in the two merges above, working through the
+"not yet tested" list.
+
+**Typing-feel in dashboard/typewriter modes** — confirmed clean via `PerfMetrics`: dashboard
+`total_frame` p50 ~580-800ms, typewriter p50 ~620-760ms, both matching `distraction_free`'s
+already-verified profile. No visual regressions (sidebar, locked-line scroll, forced full-refresh
+on newline all correct).
+
+**`deploy.sh --rollback`/`--list` — found and fixed a real bug.** `--list` worked correctly, but
+`--rollback` picked the *wrong* release: `ls -1 "$RELEASES" | sort | grep -vxF "$cur" | tail -n1`
+lexically sorts release directory names to find "the newest that isn't current". Normal releases
+are named `YYYYMMDD-HHMMSS` (sorts fine), but the one-time `setup.sh` release is named
+`setup-<ts>` — lexically `s` > `2`, so it sorted *after* every timestamped release and looked
+newest even though it's the oldest thing on disk. Reproduced live: a real rollback from
+`20260711-234528` repointed `current` at `setup-20260711-115324` instead of the actual previous
+release `20260711-233307`. A same-approach fix using directory mtime instead of name was tried and
+also rejected — running the app writes `__pycache__` into the release directory, which bumps mtime
+on every restart independent of the release's real age, so `setup-*` looked newest again after
+being started once. Fixed by sorting on each name's trailing `YYYYMMDD-HHMMSS` timestamp
+(`${d: -15}`) instead of the whole name or mtime — verified correct on a second live rollback
+(`234528 -> 233307`), confirmed `--list` reflects reality, then rolled forward back to the correct
+release. Committed alongside the `Zone.Identifier` exclude fix (`*.Zone.Identifier` →
+`*:Zone.Identifier`, real files use a colon not a dot).
+
+**FAULT-2/6/7 — all confirmed working, no bugs found.** Exercised live via a temporary
+fault-injection patch applied directly to the *deployed* `driver.py` on the Pi (not committed to
+the repo) — a file-backed counter (`/tmp/wd_fault_inject`) that forces `_run_with_retry`'s op to
+raise for N remaining attempts, checked and decremented once per attempt, so it could be armed for
+a transient fault (small N) or a persistent one (large N) without restarting the process to change
+behavior.
+- **FAULT-2**: `sudo systemctl kill -s SIGKILL writer-deck` (crash simulation) — `ExecStopPost`
+  still ran `epd_sleep.py` and logged "panel deep-sleep OK"; systemd's `Restart=` policy brought
+  the service back up cleanly afterward.
+- **FAULT-6**: armed 2 forced failures (< `DISPLAY_OP_ATTEMPTS=3`) — journal showed
+  `Display op 'display_full' failed (attempt 1/3)` / `(attempt 2/3)` then a silent recovery on
+  attempt 3, transparent to the user at the keyboard.
+- **FAULT-7**: armed 100 forced failures — app logged `Display failed repeatedly — entering
+  headless mode`, screen froze (showing whatever was last painted, not corrupted — no update ever
+  landed), input kept being accepted, `Headless: retrying display panel` fired every 30s (each
+  retry itself burning 3 attempts and failing while the fault was armed), autosave file timestamp
+  confirmed writes continued through the whole headless window. Cleared the fault
+  (`echo 0 > /tmp/wd_fault_inject`); the very next 30s retry logged "Panel recovered — resuming
+  rendering with a full refresh" and the screen came back.
+- Patch fully reverted by redeploying clean code (`./deploy.sh`) — confirmed zero trace of the
+  injection helper in the redeployed `driver.py`.
+
+**PiSugar/battery thresholds — blocked on hardware, not software.** `Power.available` requires a
+successful `get battery` response from `pisugar-server`'s Unix socket; on this Pi it returns
+`"battery: I2C not connected"`, which `Power._update()` can't parse, so `available` stays `False`
+and the entire warning/shutdown/UI path silently no-ops regardless of configured thresholds —
+lowering `battery_warning_percent`/`battery_shutdown_percent` would have had no effect. Root cause
+traced to the I2C bus itself: `sudo i2cdetect -y 1` and `-y 2` both come back completely empty (no
+device at any address, not just a missing 0x57), and `pisugar-server`'s own journal shows constant
+`Remote I/O error (os error 121)` / `Operation timed out (os error 110)` trying to reach `addr=87`
+(0x57) — consistent with an open/disconnected line rather than a software misconfiguration (the
+configured address is correct; PiSugar 3 uses 0x57 or 0x68, confirmed against PiSugar's own docs).
+This build wires PiSugar 3 to the Pi with 4 individual wires rather than the pogo-pin mechanical
+connector (see `USER_GUIDE.md`'s new "Wiring Reference" section, added this session after this
+documentation gap caused real time loss during debugging) — wiring was visually re-verified against
+that table and reported correct, but the bus stayed silent. Not resolved this session; needs
+physical checks beyond remote SSH (continuity/multimeter check on the 5V/GND/MDAT/MSCL wires, and
+confirming the PiSugar 3 board's own status LED / internal battery charge, since a PiSugar with no
+power to its own I2C MCU would explain a fully silent bus even with correct external wiring).
