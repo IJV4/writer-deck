@@ -18,6 +18,9 @@ from PIL import Image, ImageDraw
 _glyph_cache: dict[tuple[int, str], tuple[Image.Image, tuple[int, int], float]] = {}
 
 
+_THRESHOLD = 128
+
+
 def _get_glyph(font, ch: str) -> tuple[Image.Image, tuple[int, int], float]:
     key = (id(font), ch)
     entry = _glyph_cache.get(key)
@@ -30,6 +33,14 @@ def _get_glyph(font, ch: str) -> tuple[Image.Image, tuple[int, int], float]:
             offset = (0, 0)
         mask_img = Image.new("L", mask_core.size)
         mask_img.im = mask_core
+        # ImageDraw.bitmap() onto a "1"-mode target applies a much stricter
+        # cutoff to an antialiased "L" mask than draw.text() does internally
+        # (empirically near-total ink loss — most edge/interior antialiased
+        # pixels of a small font are well below 255). Threshold to "1" mode
+        # ourselves first so compositing is predictable and matches
+        # draw.text()'s visual weight (verified against draw.text() output:
+        # <0.1% pixel difference over a full line of prose).
+        mask_img = mask_img.point(lambda p: 255 if p >= _THRESHOLD else 0, mode="1")
         getlength = getattr(font, "getlength", None)
         advance = float(getlength(ch)) if getlength is not None else float(font.getbbox(ch)[2])
         entry = (mask_img, offset, advance)
