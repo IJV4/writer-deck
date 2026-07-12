@@ -40,9 +40,13 @@ class Document:
 
         # Undo/redo
         self._undo_stack: deque[_Snapshot] = deque(maxlen=100)
-        self._redo_stack: list[_Snapshot] = []
+        self._redo_stack: deque[_Snapshot] = deque(maxlen=100)
         self._last_undo_time: float = 0.0
         self._last_undo_action: str = ""
+
+        # Word count cache
+        self._cached_word_count: int = 0
+        self._word_count_dirty: bool = True
 
     # -- Text access -------------------------------------------------------
 
@@ -64,7 +68,13 @@ class Document:
 
     @property
     def word_count(self) -> int:
-        return len(re.findall(r"\S+", self.text))
+        if self._word_count_dirty:
+            self._cached_word_count = len(re.findall(r"\S+", self.text))
+            self._word_count_dirty = False
+        return self._cached_word_count
+
+    def _invalidate_word_count(self) -> None:
+        self._word_count_dirty = True
 
     @property
     def char_count(self) -> int:
@@ -95,6 +105,7 @@ class Document:
     def undo(self) -> bool:
         if not self._undo_stack:
             return False
+        self._invalidate_word_count()
         # Save current state for redo
         self._redo_stack.append(_Snapshot(
             lines=list(self._lines),
@@ -112,6 +123,7 @@ class Document:
     def redo(self) -> bool:
         if not self._redo_stack:
             return False
+        self._invalidate_word_count()
         # Save current state for undo (no coalesce)
         self._undo_stack.append(_Snapshot(
             lines=list(self._lines),
@@ -171,6 +183,7 @@ class Document:
     def delete_selection(self) -> bool:
         if self.selection is None:
             return False
+        self._invalidate_word_count()
         self._push_undo("delete_selection")
         sl, sc, el, ec = self.selection.ordered()
         if sl == el:
@@ -192,6 +205,7 @@ class Document:
     def insert(self, char: str) -> None:
         if self.selection is not None:
             self.delete_selection()
+        self._invalidate_word_count()
         self._push_undo("insert")
         if char == "\n":
             self._insert_newline()
@@ -216,6 +230,7 @@ class Document:
         if self.selection is not None:
             self.delete_selection()
             return
+        self._invalidate_word_count()
         self._push_undo("delete_backward")
         if self.cursor_col > 0:
             line = self._lines[self.cursor_line]
@@ -236,6 +251,7 @@ class Document:
         if self.selection is not None:
             self.delete_selection()
             return
+        self._invalidate_word_count()
         self._push_undo("delete_forward")
         line = self._lines[self.cursor_line]
         if self.cursor_col < len(line):
@@ -289,6 +305,7 @@ class Document:
         if self.selection is not None:
             self.delete_selection()
             return
+        self._invalidate_word_count()
         self._push_undo("delete_word_backward")
         line = self._lines[self.cursor_line]
         col = self.cursor_col
@@ -334,6 +351,7 @@ class Document:
         text = self._lines[line]
         if text[col : col + len(old)] != old:
             return False
+        self._invalidate_word_count()
         self._push_undo("replace")
         self._lines[line] = text[:col] + new + text[col + len(old) :]
         self.dirty = True
@@ -396,6 +414,7 @@ class Document:
         self.selection = None
         self._undo_stack.clear()
         self._redo_stack.clear()
+        self._invalidate_word_count()
 
     def mark_saved(self) -> None:
         self.dirty = False

@@ -9,7 +9,6 @@ import signal
 import socket
 import threading
 import time
-from typing import TYPE_CHECKING
 
 from writerdeck.core.config import get_config
 from writerdeck.core.document import Document
@@ -23,9 +22,10 @@ from writerdeck.modes.dashboard import DashboardMode
 from writerdeck.modes.distraction_free import DistractionFreeMode
 from writerdeck.modes.typewriter import TypewriterMode
 from writerdeck.utils.file_manager import FileManager
+from writerdeck.utils.perf import get_perf
 from writerdeck.utils.platform import detect_platform
 from writerdeck.utils.power import Power
-from writerdeck.utils.usb_export import find_usb_mount, export_documents
+from writerdeck.utils.usb_export import export_documents, find_usb_mount
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +120,24 @@ class App:
 
         # Wakeup event — set by _on_any_key() to interrupt the loop's idle sleep
         self._wakeup = threading.Event()
+
+        # Perf metrics
+        get_perf().enabled = self._config.enable_perf_metrics
+        self._last_perf_log: float = time.monotonic()
+
+        # Watchdog socket (reused for session lifetime)
+        self._watchdog_sock: socket.socket | None = None
+        self._watchdog_addr: str = ""
+        notify_socket = os.environ.get("NOTIFY_SOCKET", "")
+        if notify_socket:
+            addr = notify_socket
+            if addr.startswith("@"):
+                addr = "\0" + addr[1:]
+            try:
+                self._watchdog_sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+                self._watchdog_addr = addr
+            except Exception:
+                pass
 
     def _build_modes(self) -> list[BaseMode]:
         font = self._config.font_family
@@ -265,6 +283,12 @@ class App:
                     logger.info("Display woken from sleep")
                 self._render_and_refresh()
 
+            # Perf summary every 30s
+            perf = get_perf()
+            if perf.enabled and time.monotonic() - self._last_perf_log >= 30.0:
+                perf.log_summary()
+                self._last_perf_log = time.monotonic()
+
             # Watchdog
             self._notify_watchdog()
 
@@ -327,8 +351,8 @@ class App:
             self._refresh.request_full()
             return True
         if action == KeyAction.FONT_MENU:
-            from writerdeck.modes.font_picker import FontPickerOverlay
             from writerdeck.display.fonts import list_available_fonts
+            from writerdeck.modes.font_picker import FontPickerOverlay
             self._overlay = FontPickerOverlay(list_available_fonts())
             self._refresh.request_full()
             return True
@@ -385,9 +409,12 @@ class App:
                 logger.info("Font changed to: %s", result["font"])
                 # Preserve in-mode scroll state and cleanly exit the outgoing
                 # mode before rebuilding, then re-enter the same mode index.
+                # Also clear the wrap cache so old-font entries don't linger.
                 scroll_offset = getattr(self._mode, "_scroll_offset", 0)
                 self._mode.on_exit()
                 self._config._data["font_family"] = result["font"]
+                from writerdeck.utils.text_wrapper import clear_wrap_cache
+                clear_wrap_cache()
                 self._modes = self._build_modes()
                 self._mode = self._modes[self._mode_idx % len(self._modes)]
                 self._mode.on_enter()
@@ -433,95 +460,102 @@ class App:
         return True
 
     def _render_and_refresh(self, force_full: bool = False) -> None:
-        frame = self._mode.render(self._doc, self._session)
+        perf = get_perf()
 
-        # Inject title bar
-        if self._config.show_title_bar:
-            title = self._doc.name
-            if self._doc.dirty:
-                title += " *"
-            frame.title = title
+        with perf.time("total_frame"):
+            with perf.time("render_frame"):
+                frame = self._mode.render(self._doc, self._session)
+            perf.record_gauge("doc_lines", len(self._doc._lines))
 
-        # Inject status message
-        msg = self._status.current
-        if msg:
-            frame.status_message = msg
+            # Inject title bar
+            if self._config.show_title_bar:
+                title = self._doc.name
+                if self._doc.dirty:
+                    title += " *"
+                frame.title = title
 
-        # Inject battery info for dashboard or when low
-        if self._config.enable_battery_monitor and self._power.available and frame.stats is not None:
-            if self._mode.name == "dashboard":
-                frame.stats["Battery"] = self._power.battery_bar()
-                # Add time estimate if available
-                remaining = self._power.estimated_remaining_hours
-                if remaining is not None:
-                    hours = int(remaining)
-                    minutes = int((remaining - hours) * 60)
-                    frame.stats["Remaining"] = f"~{hours}h {minutes:02d}m"
-            elif self._power.is_low:
-                frame.stats["Battery"] = self._power.battery_bar()
+            # Inject status message
+            msg = self._status.current
+            if msg:
+                frame.status_message = msg
 
-        # Overlay rendering
-        if self._overlay is not None:
-            frame = self._overlay.render(frame)
+            # Inject battery info for dashboard or when low
+            if self._config.enable_battery_monitor and self._power.available and frame.stats is not None:
+                if self._mode.name == "dashboard":
+                    frame.stats["Battery"] = self._power.battery_bar()
+                    # Add time estimate if available
+                    remaining = self._power.estimated_remaining_hours
+                    if remaining is not None:
+                        hours = int(remaining)
+                        minutes = int((remaining - hours) * 60)
+                        frame.stats["Remaining"] = f"~{hours}h {minutes:02d}m"
+                elif self._power.is_low:
+                    frame.stats["Battery"] = self._power.battery_bar()
 
-        if force_full or frame.force_full_refresh:
-            self._refresh.request_full()
+            # Overlay rendering
+            if self._overlay is not None:
+                frame = self._overlay.render(frame)
 
-        idle_secs = time.monotonic() - self._last_keypress
-        will_full = self._refresh.should_full_refresh()
+            if force_full or frame.force_full_refresh:
+                self._refresh.request_full()
 
-        # During active typing, suppress streak-triggered full refreshes so
-        # rapid input doesn't cause 1-second interruptions.  Force and
-        # idle-timer triggers still fire; ghosting is cleaned up when the
-        # user pauses and the idle timer fires.
-        if will_full and idle_secs < 2.0:
-            will_full = self._refresh.should_full_refresh(ignore_streak=True)
+            idle_secs = time.monotonic() - self._last_keypress
+            will_full = self._refresh.should_full_refresh()
 
-        # PERF-1: decouple the volatile stats cadence from per-keystroke input.
-        # On the partial path, freeze the stats to the snapshot captured on the
-        # last full refresh so the Words/timer/sidebar bytes are unchanged and
-        # don't drag their rows into the dirty diff. Full refreshes paint (and
-        # snapshot) the live values.
-        if will_full:
-            if frame.stats is not None:
-                self._stats_snapshot = dict(frame.stats)
-        elif frame.stats is not None:
-            frame.stats = (
-                dict(self._stats_snapshot) if self._stats_snapshot is not None else None
-            )
+            # During active typing, suppress streak-triggered full refreshes so
+            # rapid input doesn't cause 1-second interruptions.  Force and
+            # idle-timer triggers still fire; ghosting is cleaned up when the
+            # user pauses and the idle timer fires.
+            if will_full and idle_secs < 2.0:
+                will_full = self._refresh.should_full_refresh(ignore_streak=True)
 
-        # FAULT-6/FAULT-7: the display op is bounded-retry wrapped in the driver.
-        # If it still fails it raises DisplayError — catch it here, degrade to a
-        # headless state (input + autosave keep running, panel retried on an
-        # interval) and skip this frame rather than let the exception crash the
-        # app and lose the session.
-        try:
+            # PERF-1: decouple the volatile stats cadence from per-keystroke input.
+            # On the partial path, freeze the stats to the snapshot captured on the
+            # last full refresh so the Words/timer/sidebar bytes are unchanged and
+            # don't drag their rows into the dirty diff. Full refreshes paint (and
+            # snapshot) the live values.
             if will_full:
-                deep_clean_threshold = self._config.idle_deep_clean_seconds
-                is_deep_clean = (
-                    deep_clean_threshold > 0 and idle_secs >= deep_clean_threshold
+                if frame.stats is not None:
+                    self._stats_snapshot = dict(frame.stats)
+            elif frame.stats is not None:
+                frame.stats = (
+                    dict(self._stats_snapshot) if self._stats_snapshot is not None else None
                 )
 
-                if is_deep_clean:
-                    # User has been away long enough — do a GC16 clean to wipe
-                    # any accumulated ghosting. Uses init() waveform, not init_fast().
-                    image = render(
-                        frame, self._config.font_family, self._config.font_size
+            # FAULT-6/FAULT-7: the display op is bounded-retry wrapped in the driver.
+            # If it still fails it raises DisplayError — catch it here, degrade to a
+            # headless state (input + autosave keep running, panel retried on an
+            # interval) and skip this frame rather than let the exception crash the
+            # app and lose the session.
+            try:
+                if will_full:
+                    deep_clean_threshold = self._config.idle_deep_clean_seconds
+                    is_deep_clean = (
+                        deep_clean_threshold > 0 and idle_secs >= deep_clean_threshold
                     )
-                    self._driver.display_clean(image)
-                else:
-                    image = render(
-                        frame, self._config.font_family, self._config.font_size
-                    )
-                    self._driver.display_full(image)
-            else:
-                image = render(frame, self._config.font_family, self._config.font_size)
-                self._driver.display_partial(image)
-        except DisplayError:
-            self._enter_headless()
-            return
 
-        self._refresh.record_refresh(was_full=will_full)
+                    if is_deep_clean:
+                        # User has been away long enough — do a GC16 clean to wipe
+                        # any accumulated ghosting. Uses init() waveform, not init_fast().
+                        with perf.time("render_image"):
+                            image = render(frame, self._config.font_family, self._config.font_size)
+                        with perf.time("driver_display"):
+                            self._driver.display_clean(image)
+                    else:
+                        with perf.time("render_image"):
+                            image = render(frame, self._config.font_family, self._config.font_size)
+                        with perf.time("driver_display"):
+                            self._driver.display_full(image)
+                else:
+                    with perf.time("render_image"):
+                        image = render(frame, self._config.font_family, self._config.font_size)
+                    with perf.time("driver_display"):
+                        self._driver.display_partial(image)
+            except DisplayError:
+                self._enter_headless()
+                return
+
+            self._refresh.record_refresh(was_full=will_full)
 
     # -- LONG-3 screensaver / FAULT-7 headless ----------------------------
 
@@ -647,17 +681,11 @@ class App:
     # -- Watchdog ----------------------------------------------------------
 
     def _notify_watchdog(self) -> None:
-        """Send WATCHDOG=1 to systemd if NOTIFY_SOCKET is set."""
-        notify_socket = os.environ.get("NOTIFY_SOCKET")
-        if not notify_socket:
+        """Send WATCHDOG=1 to systemd using the persistent socket."""
+        if self._watchdog_sock is None:
             return
         try:
-            addr = notify_socket
-            if addr.startswith("@"):
-                addr = "\0" + addr[1:]
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-            sock.sendto(b"WATCHDOG=1", addr)
-            sock.close()
+            self._watchdog_sock.sendto(b"WATCHDOG=1", self._watchdog_addr)
         except Exception:
             pass
 
@@ -694,6 +722,12 @@ class App:
         self._file_mgr.force_autosave(self._doc)
         self._session.persist(self._doc.word_count)
         self._driver.close()  # close() calls sleep() internally
+        if self._watchdog_sock is not None:
+            try:
+                self._watchdog_sock.close()
+            except Exception:
+                pass
+            self._watchdog_sock = None
 
     def _signal_handler(self, signum, frame) -> None:
         self._running = False  # just set flag — cleanup runs after the loop exits

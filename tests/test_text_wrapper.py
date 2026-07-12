@@ -1,7 +1,25 @@
 """Tests for pixel-aware text wrapper."""
 
-from writerdeck.utils.text_wrapper import wrap_lines, map_selection, _wrap_single_line, _break_word, _subline_offsets
+import pytest
+
+from writerdeck.utils.text_wrapper import (
+    wrap_lines,
+    map_selection,
+    _wrap_single_line,
+    _break_word,
+    _subline_offsets,
+    _wrap_cache,
+    clear_wrap_cache,
+)
 from writerdeck.display.fonts import get_font
+
+
+@pytest.fixture(autouse=True)
+def isolate_wrap_cache():
+    """Clear the wrap cache before every test for isolation."""
+    clear_wrap_cache()
+    yield
+    clear_wrap_cache()
 
 
 def test_short_line_no_wrap():
@@ -227,3 +245,40 @@ class TestMapSelection:
         # scroll_offset=1 means visual row 1 becomes index 0 in visible area
         result = map_selection((1, 0, 2, 3), row_map, scroll_offset=1)
         assert result == (0, 0, 1, 3)
+
+
+# --- wrap cache tests ---
+
+
+def test_wrap_cache_hit_skips_recomputation():
+    """Same line wrapped twice populates cache on first call; second call is a hit."""
+    line = "The quick brown fox"
+    result1, *_ = wrap_lines([line], 0, 0, "Hack", 14, 800)
+    assert len(_wrap_cache) == 1
+    result2, *_ = wrap_lines([line], 0, 0, "Hack", 14, 800)
+    assert len(_wrap_cache) == 1
+    assert result1 == result2
+
+
+def test_clear_wrap_cache_forces_recomputation():
+    """After clear_wrap_cache() the cache is empty."""
+    wrap_lines(["some text"], 0, 0, "Hack", 14, 800)
+    assert len(_wrap_cache) == 1
+    clear_wrap_cache()
+    assert len(_wrap_cache) == 0
+
+
+def test_wrap_cache_different_font_size_is_different_key():
+    """Same line at two different font sizes produces two distinct cache entries."""
+    line = "The quick brown fox"
+    wrap_lines([line], 0, 0, "Hack", 14, 800)
+    wrap_lines([line], 0, 0, "Hack", 16, 800)
+    assert len(_wrap_cache) == 2
+
+
+def test_wrap_cache_bounded_at_2000():
+    """Inserting 2001 unique lines keeps the cache at or below 2000 entries."""
+    for i in range(2001):
+        unique_line = f"unique line content number {i:05d}"
+        wrap_lines([unique_line], 0, 0, "Hack", 14, 800)
+    assert len(_wrap_cache) <= 2000

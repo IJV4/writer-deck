@@ -29,3 +29,5 @@ sleep_tiers:
   display_off_minutes: 5
   cpu_powersave_minutes: 15
   system_suspend_minutes: 30
+
+enable_perf_metrics: false
