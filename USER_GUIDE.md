@@ -299,6 +299,52 @@ sleep_tiers:
 - Any USB HID keyboard
 - 16 GB+ microSD with Raspberry Pi OS Bookworm Lite
 
+### Wiring Reference
+
+This build does **not** stack the e-Paper HAT or PiSugar 3 directly on the Pi's GPIO header.
+PiSugar 3, its PCB, and the Pi Zero 2 W sit side-by-side (no stacking) behind the keyboard; the
+e-Paper driver HAT + panel live separately (e.g. in the clamshell lid) and connect back to the Pi
+over individual wires. 13 wires total (4 PiSugar + 9 e-Paper HAT).
+
+**PiSugar 3 PCB → Pi Zero 2 W (4 wires):**
+
+| PiSugar 3 Pad | Pi Zero Pin | GPIO       | Purpose               |
+|---------------|-------------|------------|------------------------|
+| 5V OUT        | Pin 4       | 5V         | Power delivery         |
+| GND           | Pin 6       | GND        | Ground return           |
+| MDAT          | Pin 3       | GPIO 2 (SDA) | Battery data (I2C)   |
+| MSCL          | Pin 5       | GPIO 3 (SCL) | Battery clock (I2C)  |
+
+SDAT/SSCL (PiSugar's secondary I2C, used for RTC wake) are intentionally **not** connected — Writer
+Deck doesn't use scheduled wake or shutdown-state RTC alarms.
+
+**e-Paper Driver HAT Rev2.3 → Pi Zero 2 W (9 wires):**
+
+| HAT Pin | Pi Zero Pin | GPIO          | Purpose                                                   |
+|---------|-------------|---------------|------------------------------------------------------------|
+| VCC     | Pin 1       | 3.3V          | HAT logic power                                             |
+| GND     | Pin 9       | GND           | Ground                                                       |
+| DIN     | Pin 19      | GPIO 10 (MOSI)| SPI data                                                     |
+| CLK     | Pin 23      | GPIO 11 (SCLK)| SPI clock                                                    |
+| CS      | Pin 24      | GPIO 8 (CE0)  | SPI chip select                                              |
+| DC      | Pin 22      | GPIO 25       | Data/command select                                          |
+| RST     | Pin 11      | GPIO 17       | Hardware reset                                                |
+| BUSY    | Pin 18      | GPIO 24       | Display busy signal                                           |
+| PWR     | Pin 12      | GPIO 18       | Display power enable — required, without it the panel has no power and BUSY times out silently |
+
+HAT DIP switches: Display Config = **B** (0.47R, correct driving strength for the 7.5" V2 panel),
+Interface Config = **0** (4-line SPI, required by the Waveshare Python driver).
+
+No pin conflicts: PiSugar uses I2C (GPIO 2/3) + power; the e-Paper HAT uses SPI (GPIO 8/10/11) +
+control lines (GPIO 17/18/24/25) — fully independent buses.
+
+**Pi Zero 2 W USB ports:** the inner port (closer to center/HDMI) is data, used for the keyboard;
+the outer port (at the edge) is power-only and unused here since PiSugar supplies power.
+
+**Debugging notes:** persistent `ReadBusy timed out` errors on the e-Paper HAT were previously
+caused by two separate issues found in sequence — a misplaced BUSY wire, and later a missing PWR
+wire. Both are required for the display to respond.
+
 ### setup.sh
 
 The one-shot setup script handles:
