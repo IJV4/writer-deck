@@ -56,6 +56,8 @@ class KeyAction(Enum):
     FIND = auto()                # Ctrl+F
     FONT_MENU = auto()           # Ctrl+Shift+F
     EXPORT_USB = auto()          # Ctrl+E
+    OUTLINE = auto()              # Ctrl+H — heading outline overlay
+    INFO_OVERLAY = auto()         # Ctrl+I — stats/battery info overlay
 
     UNKNOWN = auto()
 
@@ -82,6 +84,8 @@ _KEY_PAGEDOWN = 109
 _KEY_A = 30
 _KEY_E = 18
 _KEY_F = 33
+_KEY_H = 35
+_KEY_I = 23
 _KEY_N = 49
 _KEY_O = 24
 _KEY_Q = 16
@@ -201,6 +205,10 @@ class KeyMapper:
                 return KeyAction.FIND, ""
             if scancode == _KEY_E:
                 return KeyAction.EXPORT_USB, ""
+            if scancode == _KEY_H:
+                return KeyAction.OUTLINE, ""
+            if scancode == _KEY_I:
+                return KeyAction.INFO_OVERLAY, ""
             return KeyAction.UNKNOWN, ""
 
         # Shift + navigation = selection
