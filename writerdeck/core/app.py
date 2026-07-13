@@ -356,6 +356,11 @@ class App:
             self._overlay = FontPickerOverlay(list_available_fonts())
             self._refresh.request_full()
             return True
+        if action == KeyAction.OUTLINE:
+            from writerdeck.modes.outline_overlay import OutlineOverlay
+            self._overlay = OutlineOverlay(self._doc._lines)
+            self._refresh.request_full()
+            return True
         if action == KeyAction.EXPORT_USB:
             target = find_usb_mount()
             if target:
@@ -421,6 +426,11 @@ class App:
                 # on_enter() resets scroll to 0; restore the prior offset.
                 if hasattr(self._mode, "_scroll_offset"):
                     self._mode._scroll_offset = scroll_offset
+            elif "jump_to_line" in result:
+                self._doc.cursor_line = result["jump_to_line"]
+                self._doc.cursor_col = 0
+                self._doc.selection = None
+                self._mode._page_manual = False
             elif "find" in result:
                 query = result["find"]
                 replace = result.get("replace")
