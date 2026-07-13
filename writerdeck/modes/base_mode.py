@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from writerdeck.core.document import Document
 from writerdeck.core.session import Session
 from writerdeck.input.keymapper import KeyAction
+from writerdeck.utils.headings import HEADING_FONT_DELTA
 
 
 @dataclass
@@ -93,6 +94,90 @@ class BaseMode(ABC):
         show_cursor = 0 <= adj_cursor < len(visible)
 
         return page, total, visible, adj_cursor, show_cursor
+
+    def _paginate_by_height(
+        self,
+        wrapped: list[str],
+        line_kinds: list[str],
+        cursor_visual_row: int,
+        avail_height_px: int,
+        font_size: int,
+    ) -> tuple[int, int, list[str], list[str], int, int, bool]:
+        """Pack wrapped rows into pages sized by actual per-row pixel height.
+
+        Unlike _paginate (fixed row count per page), this accounts for taller
+        heading rows and the blank-line gap before a heading, so a page never
+        silently drops rows the renderer would refuse to draw for lack of room.
+        The gap-before-heading rule matches renderer.py's own "skip gap if
+        it's the first drawn row" rule: a heading that lands as the first row
+        of a fresh page gets no gap.
+
+        Returns (page, total_pages, visible_lines, visible_kinds, start_row,
+        adj_cursor_line, show_cursor).
+        """
+        page_starts = self._page_starts_by_height(line_kinds, avail_height_px, font_size)
+        total = len(page_starts)
+        page_bounds = [
+            (page_starts[i], page_starts[i + 1] if i + 1 < total else len(wrapped))
+            for i in range(total)
+        ]
+
+        cursor_page = total - 1
+        for i, (start, end) in enumerate(page_bounds):
+            if start <= cursor_visual_row < end:
+                cursor_page = i
+                break
+
+        if self._page_manual and self._current_page < total:
+            page = self._current_page
+        else:
+            page = cursor_page
+            self._current_page = page
+            self._page_manual = False
+
+        page = max(0, min(page, total - 1))
+        start, end = page_bounds[page]
+        visible = wrapped[start:end]
+        visible_kinds = line_kinds[start:end]
+        adj_cursor = cursor_visual_row - start
+        show_cursor = 0 <= adj_cursor < len(visible)
+
+        return page, total, visible, visible_kinds, start, adj_cursor, show_cursor
+
+    @staticmethod
+    def _page_starts_by_height(
+        line_kinds: list[str], avail_height_px: int, font_size: int
+    ) -> list[int]:
+        """Return the wrapped-row index each page starts at (greedy forward pack)."""
+        if not line_kinds:
+            return [0]
+
+        starts = [0]
+        used = 0
+        prev_kind_on_page: str | None = None
+
+        for i, kind in enumerate(line_kinds):
+            is_first_on_page = used == 0
+            gap = (
+                font_size + 4
+                if kind in HEADING_FONT_DELTA
+                and not is_first_on_page
+                and prev_kind_on_page != kind
+                else 0
+            )
+            h = font_size + HEADING_FONT_DELTA.get(kind, 0) + 4 + gap
+
+            if used + h > avail_height_px and used > 0:
+                starts.append(i)
+                used = 0
+                # Recompute without the gap: this row is now first-on-page.
+                h = font_size + HEADING_FONT_DELTA.get(kind, 0) + 4
+                prev_kind_on_page = None
+
+            used += h
+            prev_kind_on_page = kind
+
+        return starts
 
     # -- Visual row navigation ---------------------------------------------
 
