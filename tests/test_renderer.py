@@ -230,33 +230,47 @@ class TestRenderSelection:
 
 class TestHeadingRendering:
     def test_heading_prefix_is_stripped_from_output(self):
-        # We can't read text back out of a PIL image directly, but we can
-        # assert the render doesn't crash and produces the right image props
-        # for a frame containing a heading row.
-        frame = RenderFrame(
-            text_lines=["# Chapter One", "body text"],
-            line_kinds=["h1", "body"],
-        )
-        img = render(frame, "Hack", 14)
-        assert img.size == (WIDTH, HEIGHT)
+        # Rendering "# Title" as h1 must be pixel-identical to rendering the
+        # already-stripped "Title" as h1 — proving the "# " prefix is
+        # actually removed before drawing, not just present without crashing.
+        frame_with_prefix = RenderFrame(text_lines=["# Title"], line_kinds=["h1"])
+        frame_stripped = RenderFrame(text_lines=["Title"], line_kinds=["h1"])
+        img_with_prefix = render(frame_with_prefix, "Hack", 14)
+        img_stripped = render(frame_stripped, "Hack", 14)
+        assert img_with_prefix.tobytes() == img_stripped.tobytes()
 
     def test_heading_row_is_taller_than_body_row(self):
-        # A page of all-h1 rows should fit fewer rows before the bottom-margin
-        # break than a page of all-body rows, because each row is taller.
-        many_headings = [f"# H{i}" for i in range(40)]
-        frame_h1 = RenderFrame(
-            text_lines=many_headings, line_kinds=["h1"] * 40, margin_bottom=24,
+        # Same two-line content, second line's row-kind differs: an h1 first
+        # line should push the second line down further than an all-body
+        # page, since h1's row is taller (font_size+6+4) than body's
+        # (font_size+4). Verified by finding where each line's ink actually
+        # starts on the page, not just overall image dimensions.
+        frame_h1_first = RenderFrame(
+            text_lines=["M", "M"], line_kinds=["h1", "body"], margin_bottom=8,
         )
-        many_body = [f"line {i}" for i in range(40)]
-        frame_body = RenderFrame(
-            text_lines=many_body, line_kinds=["body"] * 40, margin_bottom=24,
+        frame_all_body = RenderFrame(
+            text_lines=["M", "M"], line_kinds=["body", "body"], margin_bottom=8,
         )
-        # Render both; count non-white rows near the bottom margin as a proxy
-        # for "how far down the page drawing got" — the h1 frame should stop
-        # higher up (fewer rows drawn) than the body frame for the same count.
-        img_h1 = render(frame_h1, "Hack", 14)
-        img_body = render(frame_body, "Hack", 14)
-        assert img_h1.size == img_body.size == (WIDTH, HEIGHT)
+        img_h1 = render(frame_h1_first, "Hack", 14)
+        img_body = render(frame_all_body, "Hack", 14)
+
+        def second_row_top(img):
+            # Scan rows top-down over the columns where text is drawn; the
+            # first contiguous dark band is row 0's "M", the second band
+            # (after a run of ink-free rows) is row 1's "M".
+            height = img.size[1]
+            bands = []
+            in_band = False
+            for y in range(height):
+                has_ink = any(img.getpixel((x, y)) == 0 for x in range(0, 40))
+                if has_ink and not in_band:
+                    bands.append(y)
+                    in_band = True
+                elif not has_ink:
+                    in_band = False
+            return bands[1]  # start of second ink band
+
+        assert second_row_top(img_h1) > second_row_top(img_body)
 
     def test_no_line_kinds_defaults_to_body(self):
         # Backward compatibility: existing callers that never set line_kinds
