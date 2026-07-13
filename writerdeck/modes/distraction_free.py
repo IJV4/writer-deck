@@ -7,6 +7,7 @@ from writerdeck.core.session import Session
 from writerdeck.input.keymapper import KeyAction
 from writerdeck.modes.base_mode import BaseMode, RenderFrame
 from writerdeck.display.driver import HEIGHT
+from writerdeck.utils.headings import line_kinds_for_rows
 from writerdeck.utils.text_wrapper import map_selection, wrap_lines
 
 
@@ -42,21 +43,25 @@ class DistractionFreeMode(BaseMode):
         self._wrapped_lines = wrapped
         self._row_map = row_map
         self._wrapped_len = len(wrapped)
+        line_kinds = line_kinds_for_rows(doc._lines, row_map)
 
-        line_height = self._font_size + 4
-        visible_lines = (HEIGHT - 8 - 24) // line_height
-        page, total, visible, adj_cursor, show_cursor = self._paginate(wrapped, cursor_line, visible_lines)
-        scroll = page * visible_lines
+        avail_height_px = HEIGHT - 8 - 24
+        page, total, visible, visible_kinds, start, adj_cursor, show_cursor = (
+            self._paginate_by_height(
+                wrapped, line_kinds, cursor_line, avail_height_px, self._font_size,
+            )
+        )
 
         stats = {"Words": str(doc.word_count), "Page": f"{page + 1}/{total}"}
 
         selection = (
-            map_selection(doc.selection.ordered(), row_map, scroll)
+            map_selection(doc.selection.ordered(), row_map, start)
             if doc.selection is not None else None
         )
 
         return RenderFrame(
             text_lines=visible,
+            line_kinds=visible_kinds,
             cursor_line=adj_cursor,
             cursor_col=cursor_col,
             show_cursor=show_cursor,
