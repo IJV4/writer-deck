@@ -30,6 +30,7 @@ class RenderFrame:
     title: str = ""
     status_message: str | None = None
     selection: tuple[int, int, int, int] | None = None  # (sl, sc, el, ec) in wrapped coords
+    line_kinds: list[str] | None = None  # parallel to text_lines: "body"/"h1"/"h2" per row
 
 
 class BaseMode(ABC):

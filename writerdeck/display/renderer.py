@@ -8,6 +8,7 @@ from writerdeck.display.driver import HEIGHT, WIDTH
 from writerdeck.display.fonts import get_font
 from writerdeck.display.glyph_cache import draw_text_cached, text_width_cached
 from writerdeck.modes.base_mode import RenderFrame
+from writerdeck.utils.headings import HEADING_FONT_DELTA, HEADING_PREFIX
 
 
 def render(
@@ -22,7 +23,6 @@ def render(
     font = get_font(font_family, font_size)
 
     y = frame.margin_top
-    line_height = font_size + 4
 
     # Status message bar (inverted, top 24px)
     if frame.status_message:
@@ -38,30 +38,54 @@ def render(
         draw.line([(frame.margin_left, y + 14), (WIDTH - frame.margin_right, y + 14)], fill=0)
         y += 18
 
+    prev_kind: str | None = None
     for i, line_text in enumerate(frame.text_lines):
+        kind = frame.line_kinds[i] if frame.line_kinds else "body"
+        row_font_size = font_size + HEADING_FONT_DELTA.get(kind, 0)
+        row_font = font if kind == "body" else get_font(font_family, row_font_size)
+        line_height = row_font_size + 4
+
+        # Blank line's worth of vertical space before a heading, unless it's
+        # the first row drawn in this frame (matches base_mode's own
+        # first-on-page rule so pagination and rendering agree).
+        if kind in HEADING_FONT_DELTA and i > 0 and prev_kind != kind:
+            y += font_size + 4
+
         if y + line_height > HEIGHT - frame.margin_bottom:
             break
 
+        prefix = HEADING_PREFIX.get(kind)
+        strip_len = len(prefix) if (prefix and line_text.startswith(prefix)) else 0
+        display_text = line_text[strip_len:]
+
         # Selection highlight (inverted region)
         if frame.selection is not None:
-            _draw_selection_line(draw, frame, font, i, line_text, frame.margin_left, y, line_height)
+            _draw_selection_line(
+                draw, frame, row_font, i, display_text,
+                frame.margin_left, y, line_height, strip_len,
+            )
 
-        draw_text_cached(draw, (frame.margin_left, y), line_text, font, fill=0)
+        draw_text_cached(draw, (frame.margin_left, y), display_text, row_font, fill=0)
 
         # Re-draw selected text in white on top of black highlight
         if frame.selection is not None:
-            _draw_selected_text(draw, frame, font, i, line_text, frame.margin_left, y)
+            _draw_selected_text(
+                draw, frame, row_font, i, display_text, frame.margin_left, y, strip_len,
+            )
 
         # Draw cursor on the active line
         if i == frame.cursor_line and frame.show_cursor:
-            col = frame.cursor_col
-            prefix = line_text[:col]
-            cx = frame.margin_left + round(text_width_cached(prefix, font) if prefix else 0)
+            display_col = max(0, frame.cursor_col - strip_len)
+            col_prefix = display_text[:display_col]
+            cx = frame.margin_left + round(
+                text_width_cached(col_prefix, row_font) if col_prefix else 0
+            )
             draw.rectangle(
                 [cx, y, cx + 2, y + line_height],
                 fill=0,
             )
         y += line_height
+        prev_kind = kind
 
     # Stats footer / sidebar
     if frame.stats:
@@ -73,6 +97,7 @@ def render(
 def _draw_selection_line(
     draw: ImageDraw.ImageDraw, frame: RenderFrame, font,
     line_idx: int, line_text: str, x: int, y: int, line_height: int,
+    strip_len: int = 0,
 ) -> None:
     """Draw black highlight rectangle for selected portion of a line."""
     if frame.selection is None:
@@ -84,11 +109,14 @@ def _draw_selection_line(
     if line_idx == sl and line_idx == el:
         start_col, end_col = sc, ec
     elif line_idx == sl:
-        start_col, end_col = sc, len(line_text)
+        start_col, end_col = sc, len(line_text) + strip_len
     elif line_idx == el:
         start_col, end_col = 0, ec
     else:
-        start_col, end_col = 0, len(line_text)
+        start_col, end_col = 0, len(line_text) + strip_len
+
+    start_col = max(0, start_col - strip_len)
+    end_col = max(0, end_col - strip_len)
 
     prefix = line_text[:start_col]
     selected = line_text[:end_col]
@@ -101,6 +129,7 @@ def _draw_selection_line(
 def _draw_selected_text(
     draw: ImageDraw.ImageDraw, frame: RenderFrame, font,
     line_idx: int, line_text: str, x: int, y: int,
+    strip_len: int = 0,
 ) -> None:
     """Draw the selected text in white over the black highlight."""
     if frame.selection is None:
@@ -112,11 +141,14 @@ def _draw_selected_text(
     if line_idx == sl and line_idx == el:
         start_col, end_col = sc, ec
     elif line_idx == sl:
-        start_col, end_col = sc, len(line_text)
+        start_col, end_col = sc, len(line_text) + strip_len
     elif line_idx == el:
         start_col, end_col = 0, ec
     else:
-        start_col, end_col = 0, len(line_text)
+        start_col, end_col = 0, len(line_text) + strip_len
+
+    start_col = max(0, start_col - strip_len)
+    end_col = max(0, end_col - strip_len)
 
     prefix = line_text[:start_col]
     sel_text = line_text[start_col:end_col]

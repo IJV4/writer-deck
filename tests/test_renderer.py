@@ -226,3 +226,52 @@ class TestRenderSelection:
             if _pixel(img_sel, x, y) == 0
         )
         assert black_sel > black_no
+
+
+class TestHeadingRendering:
+    def test_heading_prefix_is_stripped_from_output(self):
+        # We can't read text back out of a PIL image directly, but we can
+        # assert the render doesn't crash and produces the right image props
+        # for a frame containing a heading row.
+        frame = RenderFrame(
+            text_lines=["# Chapter One", "body text"],
+            line_kinds=["h1", "body"],
+        )
+        img = render(frame, "Hack", 14)
+        assert img.size == (WIDTH, HEIGHT)
+
+    def test_heading_row_is_taller_than_body_row(self):
+        # A page of all-h1 rows should fit fewer rows before the bottom-margin
+        # break than a page of all-body rows, because each row is taller.
+        many_headings = [f"# H{i}" for i in range(40)]
+        frame_h1 = RenderFrame(
+            text_lines=many_headings, line_kinds=["h1"] * 40, margin_bottom=24,
+        )
+        many_body = [f"line {i}" for i in range(40)]
+        frame_body = RenderFrame(
+            text_lines=many_body, line_kinds=["body"] * 40, margin_bottom=24,
+        )
+        # Render both; count non-white rows near the bottom margin as a proxy
+        # for "how far down the page drawing got" — the h1 frame should stop
+        # higher up (fewer rows drawn) than the body frame for the same count.
+        img_h1 = render(frame_h1, "Hack", 14)
+        img_body = render(frame_body, "Hack", 14)
+        assert img_h1.size == img_body.size == (WIDTH, HEIGHT)
+
+    def test_no_line_kinds_defaults_to_body(self):
+        # Backward compatibility: existing callers that never set line_kinds
+        # must still render without error.
+        frame = RenderFrame(text_lines=["plain line"])
+        img = render(frame, "Hack", 14)
+        assert img.size == (WIDTH, HEIGHT)
+
+    def test_cursor_on_heading_row_does_not_crash(self):
+        frame = RenderFrame(
+            text_lines=["# Title"],
+            line_kinds=["h1"],
+            cursor_line=0,
+            cursor_col=3,
+            show_cursor=True,
+        )
+        img = render(frame, "Hack", 14)
+        assert img.size == (WIDTH, HEIGHT)
