@@ -1,6 +1,6 @@
 """Tests for Markdown line parser."""
 
-from writerdeck.utils.markdown import parse_line, StyledSpan
+from writerdeck.utils.markdown import parse_line
 
 
 class TestParseLine:
@@ -49,6 +49,16 @@ class TestParseLine:
         assert len(spans) == 2
         assert spans[1].text == "world"
         assert spans[1].italic is True
+
+    def test_lone_asterisk_preserved(self):
+        # A solitary, unpaired '*' must survive verbatim (was silently dropped,
+        # rendering "a * b" as "a  b").
+        result = parse_line("a * b", "Hack", 14)
+        assert "".join(s.text for s in result.spans) == "a * b"
+
+    def test_arithmetic_asterisk_preserved(self):
+        result = parse_line("2 * 3 = 6", "Hack", 14)
+        assert "".join(s.text for s in result.spans) == "2 * 3 = 6"
 
     def test_no_markdown_prefix(self):
         # "#" without space is not a heading

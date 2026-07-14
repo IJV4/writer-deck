@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 import pygame
 
-from writerdeck.display.driver import WIDTH, HEIGHT
+from writerdeck.display.driver import HEIGHT, WIDTH
 
 logger = logging.getLogger(__name__)
 

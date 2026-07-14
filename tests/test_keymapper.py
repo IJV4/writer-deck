@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from writerdeck.input.keymapper import KeyMapper, KeyAction
+from writerdeck.input.keymapper import KeyAction, KeyMapper
 
 
 class TestModifierTracking:
@@ -249,6 +249,17 @@ class TestSpecialKeys:
         m = KeyMapper()
         action, _ = m.process_event(1, 1)
         assert action == KeyAction.ESCAPE
+
+    def test_plain_tab(self):
+        m = KeyMapper()
+        action, _ = m.process_event(15, 1)  # Tab, no modifiers
+        assert action == KeyAction.TAB
+
+    def test_plain_tab_not_switch_mode(self):
+        """Plain Tab must not be mistaken for the Ctrl+Tab mode-cycle action."""
+        m = KeyMapper()
+        action, _ = m.process_event(15, 1)
+        assert action != KeyAction.SWITCH_MODE_NEXT
 
     def test_page_up(self):
         m = KeyMapper()

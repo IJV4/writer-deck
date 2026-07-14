@@ -15,6 +15,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Editable document extensions, in preference order. New documents default to
+# the first (.txt, the native format); an existing .md is loaded and saved back
+# in place rather than being read as empty and silently forked into a new .txt.
+_DOC_SUFFIXES = (".txt", ".md")
+
 
 def _atomic_write(path: Path, content: str) -> None:
     """Write content to path atomically via temp file + rename."""
@@ -44,16 +49,47 @@ def _atomic_write(path: Path, content: str) -> None:
 
 
 class FileManager:
-    def __init__(self, documents_dir: Path, autosave_interval: int = 90) -> None:
+    def __init__(
+        self,
+        documents_dir: Path,
+        autosave_interval: int = 90,
+        default_format: str = "txt",
+    ) -> None:
         self._dir = documents_dir
         self._dir.mkdir(parents=True, exist_ok=True)
         self._autosave_interval = autosave_interval
+        # Extension (WITHOUT a leading dot) used for brand-new documents that
+        # have no existing file and no remembered loaded suffix.
+        self._default_suffix = "." + default_format.lstrip(".")
         self._last_autosave = time.monotonic()
 
+    def _sanitize_name(self, name: str) -> Path:
+        """Resolve a document name to a path constrained to the docs root.
+
+        Document names may legitimately contain forward-slash subpaths (e.g.
+        ``projects/novel``), but a typed absolute path or ``..`` traversal must
+        not be able to escape ``self._dir`` — for save, autosave AND the
+        recovery read path. Raises ``ValueError`` on any name that would resolve
+        outside the documents root.
+
+        Returns the (unresolved) ``self._dir / name`` join so callers get a path
+        under the configured directory verbatim; only the traversal *check* uses
+        ``resolve()`` so symlinked temp dirs don't change the returned path.
+        """
+        base = self._dir / name
+        root = self._dir.resolve()
+        resolved = base.resolve()
+        if resolved != root and root not in resolved.parents:
+            raise ValueError(f"Document name escapes documents root: {name!r}")
+        return base
+
     def save(self, doc: Document) -> Path:
-        path = self._doc_path(doc.name)
+        path = self._doc_save_path(doc)
         path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(path, doc.text)
+        # Remember the suffix we just wrote so subsequent saves/autosaves stay
+        # on it (a new .md doc must not fork into a .txt on its second save).
+        doc.loaded_suffix = path.suffix
         # Remove autosave file on explicit save
         autosave_path = self._autosave_path(doc.name)
         if autosave_path.exists():
@@ -65,6 +101,10 @@ class FileManager:
     def load(self, name: str, doc: Document) -> None:
         path = self._doc_path(name)
         autosave_path = self._autosave_path(name)
+        # Remember the on-disk suffix so save()/autosave write back in place
+        # (a .md stays .md) rather than forking into a new .txt. When only an
+        # autosave exists, fall back to the resolved doc suffix.
+        doc.loaded_suffix = path.suffix
 
         # Recovery: prefer autosave if it's newer
         if autosave_path.exists() and path.exists():
@@ -134,9 +174,11 @@ class FileManager:
         logger.info("Created folder %s", self._dir / path)
 
     def rename(self, old_name: str, new_name: str) -> None:
-        """Rename a document (and its autosave if present)."""
+        """Rename a document (and its autosave if present), keeping its extension."""
         old_path = self._doc_path(old_name)
-        new_path = self._doc_path(new_name)
+        # Keep the source file's extension (.txt or .md) on the target so a
+        # renamed .md stays .md rather than being resurrected as a new .txt.
+        new_path = self._doc_path(new_name).with_suffix(old_path.suffix)
         new_path.parent.mkdir(parents=True, exist_ok=True)
         if old_path.exists():
             old_path.rename(new_path)
@@ -220,8 +262,39 @@ class FileManager:
         _atomic_write(path, doc.text)
         logger.debug("Autosaved %s", path)
 
+    def _doc_save_path(self, doc: Document) -> Path:
+        """Resolve where ``doc`` should be written.
+
+        Honours the suffix the document was loaded from (``doc.loaded_suffix``)
+        so a ``.md`` is saved back in place rather than forked into a ``.txt``.
+        A brand-new document — one with no existing on-disk file — uses the
+        configured default format instead.
+        """
+        base = self._sanitize_name(doc.name)
+        # If the document already lives on disk under some known suffix, keep
+        # writing to the one it was loaded from.
+        for suffix in _DOC_SUFFIXES:
+            if Path(f"{base}{suffix}").exists():
+                return Path(f"{base}{doc.loaded_suffix or _DOC_SUFFIXES[0]}")
+        # Brand-new document: use the configured default format.
+        return Path(f"{base}{self._default_suffix}")
+
     def _doc_path(self, name: str) -> Path:
-        return self._dir / f"{name}.txt"
+        """Resolve a document name to its on-disk path.
+
+        Probes the known suffixes and returns the first that exists, so a
+        document that lives only as ``name.md`` is loaded and saved back to
+        that ``.md`` file (rather than read as empty and forked into a new
+        ``.txt``). Falls back to the configured default format for a brand-new
+        document. Names are sanitized so a typed ``/`` or ``..`` cannot escape
+        the documents root.
+        """
+        base = self._sanitize_name(name)
+        for suffix in _DOC_SUFFIXES:
+            candidate = Path(f"{base}{suffix}")
+            if candidate.exists():
+                return candidate
+        return Path(f"{base}{self._default_suffix}")
 
     def _autosave_path(self, name: str) -> Path:
-        return self._dir / f"{name}.autosave"
+        return Path(f"{self._sanitize_name(name)}.autosave")

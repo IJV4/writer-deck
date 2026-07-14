@@ -2,17 +2,18 @@
 
 import pytest
 
+from writerdeck.display.fonts import get_font
 from writerdeck.utils.text_wrapper import (
-    wrap_lines,
-    map_selection,
-    _wrap_single_line,
     _break_word,
+    _char_width_cache,
     _subline_offsets,
     _text_width,
     _wrap_cache,
+    _wrap_single_line,
     clear_wrap_cache,
+    map_selection,
+    wrap_lines,
 )
-from writerdeck.display.fonts import get_font
 
 
 @pytest.fixture(autouse=True)
@@ -260,6 +261,58 @@ def test_subline_offsets_repeated_word():
     assert offsets[1] == 8
 
 
+# --- leading-whitespace wrap tests ---
+
+
+def test_indented_line_keeps_indent_when_wrapped():
+    """A wrapped indented line must retain its leading indent on the first
+    sub-line (line.split(' ') used to discard leading whitespace, dropping the
+    indentation and shifting the first sub-line's char offset off zero)."""
+    font = get_font("Hack", 14)
+    indent = "    "  # 4 leading spaces
+    body = "The quick brown fox jumps over the lazy dog again and again"
+    line = indent + body
+    # Ensure it actually wraps at this width.
+    assert _text_width(font, line) > 200
+    sub_lines = _wrap_single_line(line, font, 200)
+    assert len(sub_lines) > 1
+    # First sub-line keeps the indent.
+    assert sub_lines[0].startswith(indent)
+    # No character content is lost (ignoring inter-word space collapsing).
+    assert "".join(sub_lines).replace(" ", "") == line.replace(" ", "")
+    # And _subline_offsets sees the first sub-line starting at 0.
+    offsets = _subline_offsets(line, sub_lines)
+    assert offsets[0] == 0
+
+
+def test_cursor_in_leading_whitespace_maps_non_negative():
+    """A cursor positioned inside a wrapped line's leading whitespace must map
+    to a non-negative column (previously new_cursor_col = cursor_col - start
+    went negative because the first sub-line's offset was the indent width)."""
+    indent = "    "  # 4 leading spaces
+    body = "The quick brown fox jumps over the lazy dog again and again"
+    line = indent + body
+    # cursor at col 2 -> inside the leading whitespace
+    lines, cl, cc, row_map = wrap_lines([line], 0, 2, "Hack", 14, 200)
+    assert len(lines) > 1
+    # Cursor stays on the first visual row, at its real column (2), non-negative.
+    assert cl == 0
+    assert cc == 2
+    assert cc >= 0
+    # First visual row retains the indent so col 2 addresses a space within it.
+    assert lines[0].startswith(indent)
+    # row_map's first row starts at doc offset 0.
+    assert row_map[0] == (0, 0)
+
+
+def test_cursor_at_indent_start_maps_zero():
+    """Cursor at col 0 of an indented wrapped line maps to col 0 (guard)."""
+    line = "    " + ("alpha beta gamma delta epsilon zeta eta theta iota " * 2)
+    lines, cl, cc, row_map = wrap_lines([line], 0, 0, "Hack", 14, 200)
+    assert cl == 0
+    assert cc == 0
+
+
 class TestMapSelection:
     def _make_row_map(self, doc_lines, font_family="Hack", font_size=14, width=800):
         _, _, _, row_map = wrap_lines(doc_lines, 0, 0, font_family, font_size, width)
@@ -314,6 +367,16 @@ def test_clear_wrap_cache_forces_recomputation():
     assert len(_wrap_cache) == 1
     clear_wrap_cache()
     assert len(_wrap_cache) == 0
+
+
+def test_clear_wrap_cache_also_clears_char_width_cache():
+    """The font-keyed char-width cache must be cleared too: it keys on id(font),
+    which can be reused after a font-LRU eviction, so a stale entry would give a
+    wrong width if left behind on a font change."""
+    _text_width(get_font("Hack", 14), "hello world")
+    assert len(_char_width_cache) > 0
+    clear_wrap_cache()
+    assert len(_char_width_cache) == 0
 
 
 def test_wrap_cache_different_font_size_is_different_key():

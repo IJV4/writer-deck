@@ -6,10 +6,9 @@ from writerdeck.core.document import Document
 from writerdeck.core.session import Session
 from writerdeck.display.driver import HEIGHT
 from writerdeck.input.keymapper import KeyAction, KeyMapper
-from writerdeck.modes.distraction_free import DistractionFreeMode
 from writerdeck.modes.dashboard import DashboardMode
+from writerdeck.modes.distraction_free import DistractionFreeMode
 from writerdeck.modes.typewriter import TypewriterMode
-
 
 # Each mode uses font_size=14 → line_height=18.
 # DistractionFreeMode: margin_top=8, margin_bottom=24 → visible = (480-32)//18 = 24
@@ -192,6 +191,78 @@ class TestDashboardPagination:
         mode.handle_input(KeyAction.PAGE_PREV, "", doc)
         frame = mode.render(doc, _session())
         assert frame.stats["Page"] == "1/2"
+
+
+# ── Physical PageUp/PageDown drive pagination in paged modes ──────────────────
+
+class TestPagedKeyPageNav:
+    """PageUp/PageDown must move the paged viewport and only refresh on change."""
+
+    def test_page_down_advances_page_distraction_free(self):
+        doc = _doc_with_n_lines(_DF_VISIBLE + 1)
+        doc.cursor_line = 0  # cursor on page 1
+        mode = DistractionFreeMode()
+        mode.render(doc, _session())  # page 1, primes _visible_lines/_wrapped_len
+
+        changed = mode.handle_input(KeyAction.PAGE_DOWN, "", doc)
+        assert changed is True  # view moved → refresh warranted
+        frame = mode.render(doc, _session())
+        assert frame.stats["Page"] == "2/2"
+        assert frame.show_cursor is False  # browsing a non-cursor page
+
+    def test_page_down_noop_at_last_page_returns_false(self):
+        doc = _doc_with_n_lines(_DF_VISIBLE + 1)
+        doc.cursor_line = _DF_VISIBLE  # cursor auto-advances to page 2
+        mode = DistractionFreeMode()
+        mode.render(doc, _session())  # page 2
+
+        changed = mode.handle_input(KeyAction.PAGE_DOWN, "", doc)
+        assert changed is False  # already at last page → no wasted refresh
+        frame = mode.render(doc, _session())
+        assert frame.stats["Page"] == "2/2"
+
+    def test_page_up_returns_to_earlier_page(self):
+        doc = _doc_with_n_lines(_DF_VISIBLE + 1)
+        doc.cursor_line = _DF_VISIBLE  # cursor on page 2
+        mode = DistractionFreeMode()
+        mode.render(doc, _session())  # page 2
+
+        changed = mode.handle_input(KeyAction.PAGE_UP, "", doc)
+        assert changed is True
+        frame = mode.render(doc, _session())
+        assert frame.stats["Page"] == "1/2"
+
+    def test_page_up_noop_at_first_page_returns_false(self):
+        doc = _doc_with_n_lines(_DF_VISIBLE + 1)
+        doc.cursor_line = 0  # cursor on page 1
+        mode = DistractionFreeMode()
+        mode.render(doc, _session())  # page 1
+
+        changed = mode.handle_input(KeyAction.PAGE_UP, "", doc)
+        assert changed is False
+        frame = mode.render(doc, _session())
+        assert frame.stats["Page"] == "1/2"
+
+    def test_page_down_advances_page_dashboard(self):
+        doc = _doc_with_n_lines(_DB_VISIBLE + 1)
+        doc.cursor_line = 0
+        mode = DashboardMode()
+        mode.render(doc, _session())
+
+        changed = mode.handle_input(KeyAction.PAGE_DOWN, "", doc)
+        assert changed is True
+        frame = mode.render(doc, _session())
+        assert frame.stats["Page"] == "2/2"
+
+    def test_page_down_single_page_is_noop(self):
+        doc = _doc_with_n_lines(3)  # fits in one page
+        mode = DistractionFreeMode()
+        mode.render(doc, _session())
+
+        changed = mode.handle_input(KeyAction.PAGE_DOWN, "", doc)
+        assert changed is False
+        frame = mode.render(doc, _session())
+        assert frame.stats["Page"] == "1/1"
 
 
 # ── Typewriter mode page stat ─────────────────────────────────────────────────

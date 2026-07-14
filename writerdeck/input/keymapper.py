@@ -53,6 +53,7 @@ class KeyAction(Enum):
 
     # Phase 4/5: Overlays & Features
     ESCAPE = auto()              # scancode 1
+    TAB = auto()                 # plain Tab (scancode 15, no modifier)
     FIND = auto()                # Ctrl+F
     FONT_MENU = auto()           # Ctrl+Shift+F
     EXPORT_USB = auto()          # Ctrl+E
@@ -219,6 +220,8 @@ class KeyMapper:
                 return KeyAction.SELECT_END, ""
 
         # Special keys
+        if scancode == _KEY_TAB:
+            return KeyAction.TAB, ""
         if scancode == _KEY_BACKSPACE:
             return KeyAction.BACKSPACE, ""
         if scancode == _KEY_DELETE:
