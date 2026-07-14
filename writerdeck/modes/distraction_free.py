@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from writerdeck.core.document import Document
 from writerdeck.core.session import Session
+from writerdeck.display.driver import HEIGHT
 from writerdeck.input.keymapper import KeyAction
 from writerdeck.modes.base_mode import BaseMode, RenderFrame
-from writerdeck.display.driver import HEIGHT
 from writerdeck.utils.headings import line_kinds_for_rows
 from writerdeck.utils.text_wrapper import map_selection, wrap_lines
 
@@ -21,19 +21,7 @@ class DistractionFreeMode(BaseMode):
         self._font_size = font_size
 
     def handle_input(self, action: KeyAction, char: str, doc: Document) -> bool:
-        if action == KeyAction.PAGE_PREV:
-            self._current_page = max(0, self._current_page - 1)
-            self._page_manual = True
-            return True
-        if action == KeyAction.PAGE_NEXT:
-            self._current_page += 1
-            self._page_manual = True
-            return True
-        self._page_manual = False
-        result = self._handle_visual_updown(action, char, doc)
-        if result is not None:
-            return result
-        return self._apply_common_input(action, char, doc)
+        return self._handle_paged_input(action, char, doc)
 
     def render(self, doc: Document, session: Session) -> RenderFrame:
         wrapped, cursor_line, cursor_col, row_map = wrap_lines(

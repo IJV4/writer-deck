@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
 from pathlib import Path
+from unittest.mock import patch
 
-from writerdeck.utils.platform import detect_platform, HardwareProfile, _PI_MODEL_PATH
+from writerdeck.utils.platform import HardwareProfile, detect_platform
 
 
 class TestDetectPlatformPiZero2W:

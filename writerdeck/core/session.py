@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import time
 from datetime import date
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class Session:
@@ -59,15 +62,23 @@ class Session:
         if today != self._baseline_date:
             self._baseline_date = today
 
-    def words_written(self, current_word_count: int) -> int:
-        # BUG-4: count against a baseline that ratchets *down* to the lowest
-        # word count seen since the last start()/persist(). If the user deletes
-        # below the baseline (e.g. 100 -> 50) and then re-types (50 -> 130), the
-        # re-typed words are counted (130 - 50 = 80), rather than being lost by
-        # a naive max(0, current - 100) = 30. The baseline only moves down here;
-        # persist() advances it up to the current count after crediting words.
+    def _ratchet_baseline_down(self, current_word_count: int) -> None:
+        # BUG-4: the counting baseline only ever moves *down* here — never up.
+        # If the user deletes below the baseline (e.g. 100 -> 50), lower the
+        # baseline to the new floor so words re-typed afterwards (50 -> 130) are
+        # counted as authored (130 - 50 = 80) rather than lost by a naive
+        # max(0, current - 100) = 30. The baseline is advanced back up only by
+        # persist()/_flush(), after the pending delta has been credited.
         if current_word_count < self._start_word_count:
             self._start_word_count = current_word_count
+
+    def words_written(self, current_word_count: int) -> int:
+        # NOTE: despite reading like a pure query, this MUTATES state — it
+        # ratchets self._start_word_count downward via _ratchet_baseline_down()
+        # (see BUG-4 there). This side effect is intentional and is relied on by
+        # the dashboard render path (goal_progress -> words_written) as well as
+        # persist(); do not "fix" it into a pure function.
+        self._ratchet_baseline_down(current_word_count)
         return current_word_count - self._start_word_count
 
     def goal_progress(self, current_word_count: int) -> float:
@@ -89,8 +100,15 @@ class Session:
         if self._ledger_cache is not None and now - self._ledger_cache_time < 30.0:
             return self._ledger_cache
         if self._ledger_path.exists():
-            with open(self._ledger_path) as f:
-                result = json.load(f)
+            try:
+                with open(self._ledger_path) as f:
+                    result = json.load(f)
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError) as e:
+                # A corrupt/truncated/unreadable daily.json must not crash the
+                # dashboard render path (goal_bar -> goal_progress ->
+                # _today_total -> _load_ledger). Treat it as an empty ledger.
+                logger.warning("Could not read daily ledger %s: %s", self._ledger_path, e)
+                result = {}
         else:
             result = {}
         self._ledger_cache = result

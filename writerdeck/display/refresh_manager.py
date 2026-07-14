@@ -16,7 +16,6 @@ class RefreshManager:
         self._idle_full_seconds = idle_full_seconds
         self._full_refresh_max_seconds = full_refresh_max_seconds
         self._partial_streak = 0
-        self._last_refresh_time = time.monotonic()
         self._last_full_time = time.monotonic()
         # PERF-4: the idle-full timer measures time since the last *keypress*,
         # not the last refresh, so pausing to think then resuming doesn't force
@@ -53,4 +52,3 @@ class RefreshManager:
             self._last_full_time = time.monotonic()
         else:
             self._partial_streak += 1
-        self._last_refresh_time = time.monotonic()

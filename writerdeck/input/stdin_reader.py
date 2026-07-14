@@ -7,7 +7,7 @@ import queue
 import select
 import sys
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 from writerdeck.input.keymapper import KeyAction
 
@@ -34,9 +34,14 @@ _ESCAPE_SEQUENCES: dict[str, KeyAction] = {
     # Ctrl+arrow (word movement)
     "\x1b[1;5C": KeyAction.WORD_RIGHT,
     "\x1b[1;5D": KeyAction.WORD_LEFT,
+    # Ctrl+Up/Down (pagination) — parity with the evdev PAGE_PREV/PAGE_NEXT
+    "\x1b[1;5A": KeyAction.PAGE_PREV,
+    "\x1b[1;5B": KeyAction.PAGE_NEXT,
     # Ctrl+Shift+arrow (word selection)
     "\x1b[1;6C": KeyAction.SELECT_WORD_RIGHT,
     "\x1b[1;6D": KeyAction.SELECT_WORD_LEFT,
+    # Shift+Tab (reverse mode cycle) — Tab alone maps to SWITCH_MODE_NEXT below
+    "\x1b[Z": KeyAction.SWITCH_MODE_PREV,
 }
 
 # Ctrl+key byte values
@@ -89,8 +94,8 @@ class StdinReader:
 
     def _read_loop(self) -> None:
         try:
-            import tty
             import termios
+            import tty
         except ImportError:
             logger.error("termios not available — stdin keyboard unavailable")
             return
@@ -146,8 +151,15 @@ class StdinReader:
 
         Returns ``(action, leftover)`` where ``action`` is the mapped
         KeyAction (or None if unrecognized) and ``leftover`` is the bytes read
-        after the leading ESC that did not form a recognized sequence — the
-        caller re-emits these so e.g. the ``f`` in Alt+F is not dropped.
+        after the leading ESC that the caller should re-emit as CHARs.
+
+        Alt+<letter> is transmitted as ESC directly followed by a printable
+        byte (not ``[`` or ``O``); its byte is returned as leftover so e.g. the
+        ``f`` in Alt+F is not dropped. A structured CSI (``ESC [`` … final
+        byte) or SS3 (``ESC O`` final byte) sequence that is not in the mapping
+        table (Insert ``ESC [ 2 ~``, F-keys ``ESC O P`` / ``ESC [ 15 ~``, …) is
+        consumed whole and dropped — returning no leftover — so its literal
+        payload (``[2~``, ``OP``, …) is never injected into the document.
         """
         buf = first
         # Read more characters with short timeout
@@ -160,10 +172,23 @@ class StdinReader:
             buf += ch
             if buf in _ESCAPE_SEQUENCES:
                 return _ESCAPE_SEQUENCES[buf], ""
-            # Tilde-terminated sequences
+            # A CSI (ESC [ …) or SS3 (ESC O …) introducer means the remaining
+            # bytes form a structured control sequence, not literal text.
+            is_control_seq = len(buf) >= 2 and buf[1] in ("[", "O")
+            # Tilde terminates a CSI sequence.
             if ch == "~":
-                return _ESCAPE_SEQUENCES.get(buf), "" if buf in _ESCAPE_SEQUENCES else buf[1:]
-            # Letter-terminated CSI sequences
-            if ch.isalpha() and len(buf) >= 3:
-                return _ESCAPE_SEQUENCES.get(buf), "" if buf in _ESCAPE_SEQUENCES else buf[1:]
-        return _ESCAPE_SEQUENCES.get(buf), "" if buf in _ESCAPE_SEQUENCES else buf[1:]
+                if buf in _ESCAPE_SEQUENCES:
+                    return _ESCAPE_SEQUENCES[buf], ""
+                return None, ""  # unmapped CSI — consume and drop
+            # A final letter terminates a CSI/SS3 sequence. Guard on the
+            # control-seq introducer so Alt+<letter> (ESC + letter, len 2)
+            # still leaks its byte as a CHAR.
+            if ch.isalpha() and is_control_seq and len(buf) >= 3:
+                return _ESCAPE_SEQUENCES.get(buf), ""
+        # Timed out / no more bytes. Drop structured control sequences whole;
+        # otherwise re-emit the bytes after ESC (e.g. bare Alt+<letter>).
+        if buf in _ESCAPE_SEQUENCES:
+            return _ESCAPE_SEQUENCES[buf], ""
+        if len(buf) >= 2 and buf[1] in ("[", "O"):
+            return None, ""  # unmapped CSI/SS3 — consume and drop
+        return None, buf[1:]

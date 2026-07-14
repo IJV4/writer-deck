@@ -40,8 +40,10 @@ class FindOverlay(Overlay):
                 return {"find": self._search, "replace": self._replace}
             return {"find": self._search}
 
-        # Tab switches between search and replace fields
-        if action == KeyAction.SWITCH_MODE_NEXT:
+        # Tab switches between search and replace fields.
+        # SWITCH_MODE_NEXT is Ctrl+Tab (works on the stdin backend); KeyAction.TAB
+        # is a plain unmodified Tab (evdev/pygame emit this, not SWITCH_MODE_NEXT).
+        if action in (KeyAction.TAB, KeyAction.SWITCH_MODE_NEXT):
             self._in_replace_field = not self._in_replace_field
             return None
 

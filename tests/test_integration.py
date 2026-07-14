@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
-
 from writerdeck.core.document import Document
 from writerdeck.core.session import Session
 from writerdeck.input.keymapper import KeyAction, KeyMapper
-from writerdeck.modes.distraction_free import DistractionFreeMode
 from writerdeck.modes.dashboard import DashboardMode
-from writerdeck.modes.typewriter import TypewriterMode
-from writerdeck.modes.font_picker import FontPickerOverlay
+from writerdeck.modes.distraction_free import DistractionFreeMode
 from writerdeck.modes.file_picker import FilePickerOverlay
 from writerdeck.modes.find_overlay import FindOverlay
+from writerdeck.modes.font_picker import FontPickerOverlay
+from writerdeck.modes.typewriter import TypewriterMode
 
 
 class TestTypingAndUndo:

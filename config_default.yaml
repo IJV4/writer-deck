@@ -3,10 +3,8 @@ font_family: Hack
 font_size: 14
 daily_goal_words: 500
 partial_refresh_max_streak: 5
-render_interval_ms: 500
 idle_full_refresh_seconds: 10
 full_refresh_max_seconds: 300  # wall-clock backstop: force a full refresh at least this often
-display_sleep_minutes: 5
 display_idle_sleep_seconds: 20  # deep-sleep the panel after this many seconds of no keystroke
 display_screensaver_seconds: 1800  # LONG-3: blank to a white "paused" frame before long-idle deep sleep (0 = disabled)
 keyboard_device: auto

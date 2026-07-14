@@ -1,8 +1,6 @@
 """Tests for Document text buffer and cursor model."""
 
-import time
 
-import pytest
 from writerdeck.core.document import Document, Selection
 
 
@@ -741,9 +739,35 @@ class TestWordCountCache:
 
     def test_redo_stack_bounded(self):
         doc = Document()
-        # Do 101 inserts then undo them all — fills redo stack beyond 100
+        # Do 101 inserts (defeating coalescing so each is its own undo group)
+        # then undo them all — this fills the redo stack beyond 100.
         for _i in range(101):
+            doc._last_undo_time = 0  # Force a new undo group per insert
             doc.insert("a")
         for _i in range(101):
             doc.undo()
         assert len(doc._redo_stack) <= 100
+
+    def test_edit_after_undo_invalidates_redo(self):
+        # Task 1 regression: an edit within the 1s coalesce window, made while
+        # the undo stack is non-empty, must still invalidate redo — the stale
+        # redo snapshot must not resurrect the superseded text nor drop the
+        # just-typed char.
+        doc = Document()
+        # First undo group.
+        doc.insert("a")
+        # Second, distinct undo group.
+        doc._last_undo_time = 0
+        doc.insert("b")
+        assert doc.text == "ab"
+        # Undo the second group.
+        doc.undo()
+        assert doc.text == "a"
+        # Now type again WITHIN the coalesce window (same "insert" action, and
+        # _last_undo_time is recent because undo() left it untouched). This is
+        # a new edit and must clear the redo stack.
+        doc.insert("c")
+        assert doc.text == "ac"
+        # redo() must be a no-op: it must not resurrect "ab" nor lose "c".
+        assert doc.redo() is False
+        assert doc.text == "ac"

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import time
-from pathlib import Path
 
-from writerdeck.utils.file_manager import _atomic_write, FileManager
+import pytest
+
 from writerdeck.core.document import Document
+from writerdeck.utils.file_manager import FileManager, _atomic_write
 
 
 class TestAtomicWrite:
@@ -138,6 +138,193 @@ class TestFileManagerLoad:
         # Should not crash; doc keeps its original content
         # (load is only called if file exists in path or autosave)
         assert doc.name == "original"
+
+
+class TestFileManagerMarkdown:
+    """.md files must load and save back in place, not fork into a new .txt."""
+
+    def test_load_md_only_document(self, tmp_path):
+        # Previously loaded EMPTY because _doc_path only ever probed .txt.
+        fm = FileManager(tmp_path)
+        (tmp_path / "notes.md").write_text("# Heading\nbody text")
+        doc = Document()
+        fm.load("notes", doc)
+        assert doc.text == "# Heading\nbody text"
+        assert doc.name == "notes"
+
+    def test_save_preserves_md_extension(self, tmp_path):
+        # Saving a .md-loaded doc must overwrite the .md, not orphan it as .txt.
+        fm = FileManager(tmp_path)
+        (tmp_path / "notes.md").write_text("original")
+        doc = Document()
+        fm.load("notes", doc)
+        doc.load("edited", "notes")
+        doc.dirty = True
+        result = fm.save(doc)
+        assert result == tmp_path / "notes.md"
+        assert (tmp_path / "notes.md").read_text() == "edited"
+        assert not (tmp_path / "notes.txt").exists()
+
+    def test_new_document_saves_as_txt(self, tmp_path):
+        fm = FileManager(tmp_path)
+        doc = Document("fresh content")
+        doc.name = "fresh"
+        doc.dirty = True
+        result = fm.save(doc)
+        assert result == tmp_path / "fresh.txt"
+
+    def test_txt_preferred_when_both_exist(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "dup.txt").write_text("from txt")
+        (tmp_path / "dup.md").write_text("from md")
+        doc = Document()
+        fm.load("dup", doc)
+        assert doc.text == "from txt"
+
+    def test_last_open_finds_md_document(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "notes.md").write_text("content")
+        fm.save_last_open("notes")
+        assert fm.load_last_open() == "notes"
+
+    def test_rename_preserves_md_extension(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "notes.md").write_text("content")
+        fm.rename("notes", "renamed")
+        assert not (tmp_path / "notes.md").exists()
+        assert (tmp_path / "renamed.md").read_text() == "content"
+        assert not (tmp_path / "renamed.txt").exists()
+
+
+class TestFileManagerLoadedSuffix:
+    """Task 3: a doc must save back to the suffix it was loaded from, even when
+    a sibling of the other extension also exists on disk."""
+
+    def test_load_records_txt_suffix(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "doc.txt").write_text("text")
+        doc = Document()
+        fm.load("doc", doc)
+        assert doc.loaded_suffix == ".txt"
+
+    def test_load_records_md_suffix(self, tmp_path):
+        fm = FileManager(tmp_path)
+        (tmp_path / "doc.md").write_text("md text")
+        doc = Document()
+        fm.load("doc", doc)
+        assert doc.loaded_suffix == ".md"
+
+    def test_md_saved_back_to_md_when_txt_sibling_exists(self, tmp_path):
+        # The silent wrong-file save: a doc loaded from doc.md must NOT be
+        # written to doc.txt just because a doc.txt sibling also exists.
+        fm = FileManager(tmp_path)
+        (tmp_path / "doc.txt").write_text("old txt sibling")
+        (tmp_path / "doc.md").write_text("md original")
+        doc = Document()
+        # Explicitly load the .md (in practice reached via the file picker).
+        doc.loaded_suffix = ".md"
+        doc.name = "doc"
+        doc.load("md edited", "doc")
+        doc.loaded_suffix = ".md"
+        doc.dirty = True
+        result = fm.save(doc)
+        assert result == tmp_path / "doc.md"
+        assert (tmp_path / "doc.md").read_text() == "md edited"
+        # The .txt sibling must be left untouched.
+        assert (tmp_path / "doc.txt").read_text() == "old txt sibling"
+
+    def test_new_md_doc_stays_md_on_second_save(self, tmp_path):
+        # A brand-new doc created with default_format="md" must not fork into a
+        # .txt on its second save.
+        fm = FileManager(tmp_path, default_format="md")
+        doc = Document("first")
+        doc.name = "fresh"
+        doc.dirty = True
+        first = fm.save(doc)
+        assert first == tmp_path / "fresh.md"
+        doc.insert("!")  # mutate + mark dirty
+        second = fm.save(doc)
+        assert second == tmp_path / "fresh.md"
+        assert not (tmp_path / "fresh.txt").exists()
+
+
+class TestFileManagerDefaultFormat:
+    """Task 4: the default_format knob controls the suffix of brand-new docs."""
+
+    def test_default_is_txt(self, tmp_path):
+        fm = FileManager(tmp_path)
+        doc = Document("content")
+        doc.name = "fresh"
+        doc.dirty = True
+        assert fm.save(doc) == tmp_path / "fresh.txt"
+
+    def test_default_md_for_new_doc(self, tmp_path):
+        fm = FileManager(tmp_path, default_format="md")
+        doc = Document("content")
+        doc.name = "fresh"
+        doc.dirty = True
+        assert fm.save(doc) == tmp_path / "fresh.md"
+
+    def test_default_format_accepts_dotted_value(self, tmp_path):
+        # Robust against a caller passing ".md" instead of "md".
+        fm = FileManager(tmp_path, default_format=".md")
+        doc = Document("content")
+        doc.name = "fresh"
+        doc.dirty = True
+        assert fm.save(doc) == tmp_path / "fresh.md"
+
+    def test_load_probes_both_suffixes_regardless_of_default(self, tmp_path):
+        # An existing .txt still loads even when the default is md.
+        fm = FileManager(tmp_path, default_format="md")
+        (tmp_path / "existing.txt").write_text("hi")
+        doc = Document()
+        fm.load("existing", doc)
+        assert doc.text == "hi"
+        assert doc.loaded_suffix == ".txt"
+
+
+class TestFileManagerPathTraversal:
+    """Task 5: document names must not escape the documents root."""
+
+    def test_save_rejects_parent_traversal(self, tmp_path):
+        fm = FileManager(tmp_path)
+        doc = Document("evil")
+        doc.name = "../evil"
+        doc.dirty = True
+        with pytest.raises(ValueError):
+            fm.save(doc)
+        assert not (tmp_path.parent / "evil.txt").exists()
+
+    def test_save_rejects_absolute_path(self, tmp_path):
+        fm = FileManager(tmp_path)
+        doc = Document("evil")
+        doc.name = "/etc/x"
+        doc.dirty = True
+        with pytest.raises(ValueError):
+            fm.save(doc)
+
+    def test_autosave_rejects_parent_traversal(self, tmp_path):
+        fm = FileManager(tmp_path)
+        doc = Document("evil")
+        doc.name = "../evil"
+        doc.dirty = True
+        with pytest.raises(ValueError):
+            fm.force_autosave(doc)
+
+    def test_load_rejects_parent_traversal(self, tmp_path):
+        fm = FileManager(tmp_path)
+        doc = Document()
+        with pytest.raises(ValueError):
+            fm.load("../../etc/passwd", doc)
+
+    def test_legitimate_subfolder_allowed(self, tmp_path):
+        fm = FileManager(tmp_path)
+        doc = Document("in a subfolder")
+        doc.name = "subfolder/doc"
+        doc.dirty = True
+        result = fm.save(doc)
+        assert result == tmp_path / "subfolder" / "doc.txt"
+        assert (tmp_path / "subfolder" / "doc.txt").read_text() == "in a subfolder"
 
 
 class TestFileManagerAutosave:

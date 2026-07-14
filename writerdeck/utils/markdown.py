@@ -78,8 +78,10 @@ def parse_line(raw: str, base_family: str, base_size: int) -> StyledLine:
 def _parse_inline(text: str) -> list[StyledSpan]:
     """Parse inline **bold** and *italic* spans."""
     spans: list[StyledSpan] = []
-    # Pattern: **bold**, *italic*, or plain text
-    pattern = re.compile(r"\*\*(.+?)\*\*|\*(.+?)\*|([^*]+)")
+    # Pattern: **bold**, *italic*, plain text, or a lone `*`. The final
+    # alternative also matches a solitary asterisk so an unpaired `*` (e.g.
+    # "a * b") is preserved as literal text rather than silently dropped.
+    pattern = re.compile(r"\*\*(.+?)\*\*|\*(.+?)\*|([^*]+|\*)")
     for m in pattern.finditer(text):
         if m.group(1):
             spans.append(StyledSpan(text=m.group(1), bold=True))
