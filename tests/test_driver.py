@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image
 
 from writerdeck.display.driver import (
+    HEIGHT,
+    WIDTH,
     DisplayError,
     EPaperDriver,
     NullDriver,
     compute_dirty_bands,
     compute_x_window,
     create_driver,
-    WIDTH,
-    HEIGHT,
 )
 
 # ---------------------------------------------------------------------------
@@ -372,6 +371,7 @@ class TestCreateDriver:
         # create_driver catches any init failure and falls back to NullDriver.
         # We simulate hardware unavailability by making EPaperDriver.init raise.
         from unittest.mock import patch
+
         from writerdeck.display.driver import EPaperDriver
         with patch.object(EPaperDriver, "init", side_effect=RuntimeError("no hardware")):
             drv = create_driver(use_null=False)
@@ -654,9 +654,8 @@ class TestDisplayOpRetry:
         with _mock.patch.dict(
             "sys.modules",
             {"waveshare_epd": pkg, "waveshare_epd.epdconfig": fake_cfg},
-        ):
-            with pytest.raises(DisplayError):
-                drv.display_full(Image.new("1", (WIDTH, HEIGHT), 255))
+        ), pytest.raises(DisplayError):
+            drv.display_full(Image.new("1", (WIDTH, HEIGHT), 255))
 
     def test_reinit_between_tries_uses_current_waveform(self):
         # On a partial-path fault, the retry re-inits the 'part' waveform.
@@ -676,3 +675,206 @@ class TestDisplayOpRetry:
         drv.display_partial(_make_image())
         # No DisplayError; frames written normally.
         assert len(list(tmp_path.glob("*.png"))) == 2
+
+
+# ---------------------------------------------------------------------------
+# SPI thread-safety: serialize hardware ops behind an RLock
+# ---------------------------------------------------------------------------
+
+
+class TestEPaperDriverSpiLock:
+    """The Power thread's emergency sleep() must not interleave with a main-loop
+    display op — EPD SPI is not thread-safe. Every public hardware op holds the
+    driver's RLock. RLock (not Lock) because the public ops call _run_with_retry
+    / _reinit while already holding it.
+    """
+
+    def test_driver_has_rlock(self):
+
+        drv = EPaperDriver()
+        # An RLock instance's type is the private _thread.RLock; the public way
+        # to check is that acquiring it twice from the same thread doesn't block.
+        assert drv._lock.acquire(blocking=False)
+        assert drv._lock.acquire(blocking=False)  # reentrant — would block on a Lock
+        drv._lock.release()
+        drv._lock.release()
+
+    def test_display_op_acquires_lock(self):
+        # While a display op is running, the lock must be held (so a concurrent
+        # sleep() from another thread blocks). We prove it by inspecting the lock
+        # from inside the mocked hardware call.
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        seen = {}
+
+        def _record(_buf):
+            # Held by us on this thread; a *different* thread could not acquire.
+            seen["held"] = drv._lock.acquire(blocking=False)
+            if seen["held"]:
+                drv._lock.release()
+
+        mock_epd.display.side_effect = _record
+        drv.display_full(Image.new("1", (WIDTH, HEIGHT), 255))
+        # Reentrant acquire succeeds because we're on the owning thread — the
+        # point is the op ran *inside* the locked region.
+        assert seen["held"] is True
+
+    def test_concurrent_sleep_does_not_interleave_with_display(self):
+        # Simulate the real race: the Power thread calls sleep() while the main
+        # loop is mid display_full. The lock must serialize them so epd.sleep()
+        # never runs between the two writebytes of a display op.
+        import threading
+
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        events: list[str] = []
+        started = threading.Event()
+
+        def _slow_display(_buf):
+            events.append("display_start")
+            started.set()
+            # Give the other thread time to try to sleep() mid-op.
+            import time
+
+            time.sleep(0.05)
+            events.append("display_end")
+
+        def _record_sleep():
+            events.append("sleep")
+
+        mock_epd.display.side_effect = _slow_display
+        mock_epd.sleep.side_effect = _record_sleep
+
+        t = threading.Thread(
+            target=lambda: drv.display_full(Image.new("1", (WIDTH, HEIGHT), 255))
+        )
+        t.start()
+        started.wait(timeout=1.0)
+        drv.sleep()  # blocks until display_full releases the lock
+        t.join(timeout=2.0)
+
+        # sleep() must land strictly after the display op finished, not between
+        # its internal steps.
+        assert events == ["display_start", "display_end", "sleep"]
+
+
+class TestCheckBusyGetStatus:
+    """_check_busy must send the 0x71 get-status command before sampling the
+    BUSY pin — the panel only latches busy state in response to 0x71.
+    """
+
+    def _patch_epdconfig(self, digital_read_val: int):
+        import types
+        from unittest import mock as _mock
+
+        fake_cfg = types.ModuleType("epdconfig")
+        fake_cfg.digital_read = MagicMock(return_value=digital_read_val)
+        pkg = types.ModuleType("waveshare_epd")
+        pkg.epdconfig = fake_cfg
+        return _mock.patch.dict(
+            "sys.modules",
+            {"waveshare_epd": pkg, "waveshare_epd.epdconfig": fake_cfg},
+        )
+
+    def test_get_status_sent_before_sampling_pin(self):
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        mock_epd.busy_pin = 24
+        with self._patch_epdconfig(digital_read_val=1):  # ready
+            drv._check_busy()
+        mock_epd.send_command.assert_called_once_with(0x71)
+
+    def test_no_send_command_attr_is_noop(self):
+        # A mock/driver variant lacking send_command must not break the probe.
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        mock_epd.busy_pin = 24
+        # Remove send_command so getattr(..., None) yields a non-callable.
+        del mock_epd.send_command
+        with self._patch_epdconfig(digital_read_val=1):
+            drv._check_busy()  # must not raise
+
+    def test_send_command_failure_does_not_mask_busy_raise(self):
+        # If the status probe itself raises, we still sample the pin and raise
+        # on a lingering-busy timeout.
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        mock_epd.busy_pin = 24
+        mock_epd.send_command.side_effect = RuntimeError("SPI down")
+        with self._patch_epdconfig(digital_read_val=0):  # still busy
+            with pytest.raises(RuntimeError):
+                drv._check_busy()
+
+    def test_no_busy_pin_skips_get_status(self):
+        # Desktop/test path: no busy_pin → no 0x71, no epdconfig import.
+        drv, mock_epd = _make_epd_driver(mode="fast")
+        mock_epd.busy_pin = None
+        drv._check_busy()
+        mock_epd.send_command.assert_not_called()
+
+
+class TestInitTearsDownOldController:
+    """Recovery re-init must release the previous controller before building a
+    fresh EPD, so a failed panel's GPIO/SPI handle isn't leaked.
+    """
+
+    def _patch_epd_module(self, new_epd, module_exit):
+        import types
+        from unittest import mock as _mock
+
+        fake_epd_mod = types.ModuleType("epd7in5_V2")
+        fake_epd_mod.EPD = MagicMock(return_value=new_epd)
+        fake_cfg = types.ModuleType("epdconfig")
+        fake_cfg.module_exit = module_exit
+        pkg = types.ModuleType("waveshare_epd")
+        pkg.epd7in5_V2 = fake_epd_mod
+        pkg.epdconfig = fake_cfg
+        return _mock.patch.dict(
+            "sys.modules",
+            {
+                "waveshare_epd": pkg,
+                "waveshare_epd.epd7in5_V2": fake_epd_mod,
+                "waveshare_epd.epdconfig": fake_cfg,
+            },
+        )
+
+    def test_reinit_sleeps_old_controller_and_exits_module(self):
+        old_epd = MagicMock()
+        new_epd = MagicMock()
+        module_exit = MagicMock()
+        drv = EPaperDriver()
+        drv._epd = old_epd
+        with self._patch_epd_module(new_epd, module_exit):
+            drv.init()
+        old_epd.sleep.assert_called_once()
+        module_exit.assert_called_once()
+        assert drv._epd is new_epd
+        new_epd.init_fast.assert_called_once()
+
+    def test_reinit_tolerates_dead_old_controller(self):
+        # If the old controller is already dead, teardown must not raise.
+        old_epd = MagicMock()
+        old_epd.sleep.side_effect = RuntimeError("already dead")
+        new_epd = MagicMock()
+        module_exit = MagicMock(side_effect=RuntimeError("gpio gone"))
+        drv = EPaperDriver()
+        drv._epd = old_epd
+        with self._patch_epd_module(new_epd, module_exit):
+            drv.init()  # must not raise
+        assert drv._epd is new_epd
+
+
+class TestCreateDriverLoudFallback:
+    def test_fallback_logs_at_error_with_exc_info(self, caplog):
+        import logging as _logging
+        from unittest.mock import patch
+
+        from writerdeck.display.driver import EPaperDriver as _EPD
+
+        with patch.object(_EPD, "init", side_effect=RuntimeError("no panel")):
+            with caplog.at_level(_logging.ERROR, logger="writerdeck.display.driver"):
+                drv = create_driver(use_null=False)
+        assert isinstance(drv, NullDriver)
+        # Loud, explicit ERROR — not a quiet WARNING.
+        error_records = [r for r in caplog.records if r.levelno >= _logging.ERROR]
+        assert error_records, "fallback must log at ERROR level"
+        msg = error_records[0].getMessage().lower()
+        assert "headless" in msg or "failed" in msg
+        # exc_info captured so the underlying failure is in the log.
+        assert error_records[0].exc_info is not None
+

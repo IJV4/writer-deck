@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import time
 from datetime import date
-from pathlib import Path
 from unittest.mock import patch
 
 from writerdeck.core.session import Session
@@ -397,3 +396,55 @@ class TestLedgerCache:
         s._save_ledger({"2026-01-01": 100})
         assert s._ledger_cache == {"2026-01-01": 100}
         assert s._ledger_cache_time > 0
+
+
+class TestCorruptLedger:
+    """A corrupt/unreadable daily.json must degrade to an empty ledger, not
+    crash the dashboard render path (goal_bar -> goal_progress -> _load_ledger).
+    """
+
+    def test_load_ledger_invalid_json_returns_empty(self, tmp_path):
+        ledger_path = tmp_path / "daily.json"
+        ledger_path.write_text("{not valid json")  # malformed
+        s = Session()
+        s._ledger_path = ledger_path
+        assert s._load_ledger() == {}
+
+    def test_load_ledger_truncated_json_returns_empty(self, tmp_path):
+        ledger_path = tmp_path / "daily.json"
+        ledger_path.write_text('{"2026-01-01": 4')  # truncated mid-value
+        s = Session()
+        s._ledger_path = ledger_path
+        assert s._load_ledger() == {}
+
+    def test_load_ledger_empty_file_returns_empty(self, tmp_path):
+        ledger_path = tmp_path / "daily.json"
+        ledger_path.write_text("")  # empty -> JSONDecodeError
+        s = Session()
+        s._ledger_path = ledger_path
+        assert s._load_ledger() == {}
+
+    def test_goal_progress_survives_corrupt_ledger(self, tmp_path):
+        ledger_path = tmp_path / "daily.json"
+        ledger_path.write_text("garbage!!!")
+        s = Session(daily_goal=100)
+        s._ledger_path = ledger_path
+        s.start(0)
+        # Corrupt ledger treated as empty -> only pending delta counts.
+        assert abs(s.goal_progress(50) - 0.5) < 0.01
+
+    def test_goal_bar_survives_corrupt_ledger(self, tmp_path):
+        ledger_path = tmp_path / "daily.json"
+        ledger_path.write_text("\x00\x01\x02not-json")
+        s = Session(daily_goal=100)
+        s._ledger_path = ledger_path
+        s.start(0)
+        bar = s.goal_bar(0, width=5)
+        assert bar == "[□□□□□]"
+
+    def test_today_total_survives_corrupt_ledger(self, tmp_path):
+        ledger_path = tmp_path / "daily.json"
+        ledger_path.write_text("[]corrupt")
+        s = Session()
+        s._ledger_path = ledger_path
+        assert s._today_total() == 0

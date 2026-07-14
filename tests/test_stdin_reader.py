@@ -21,6 +21,13 @@ class TestEscapeSequences:
         assert _ESCAPE_SEQUENCES["\x1b[1;5C"] == KeyAction.WORD_RIGHT
         assert _ESCAPE_SEQUENCES["\x1b[1;5D"] == KeyAction.WORD_LEFT
 
+    def test_ctrl_up_down_paginate(self):
+        assert _ESCAPE_SEQUENCES["\x1b[1;5A"] == KeyAction.PAGE_PREV
+        assert _ESCAPE_SEQUENCES["\x1b[1;5B"] == KeyAction.PAGE_NEXT
+
+    def test_shift_tab_prev_mode(self):
+        assert _ESCAPE_SEQUENCES["\x1b[Z"] == KeyAction.SWITCH_MODE_PREV
+
     def test_page_keys(self):
         assert _ESCAPE_SEQUENCES["\x1b[5~"] == KeyAction.PAGE_UP
         assert _ESCAPE_SEQUENCES["\x1b[6~"] == KeyAction.PAGE_DOWN
@@ -79,3 +86,68 @@ class TestEscapeLeftover:
         action, leftover = reader._read_escape_sequence("\x1b")
         assert action is None
         assert "f" in leftover  # the 'f' must not be dropped
+
+    def test_shift_tab_sequence_parsed(self, monkeypatch):
+        # Shift+Tab sends ESC [ Z — a letter-terminated CSI sequence.
+        self._feed(monkeypatch, "[Z")
+        reader = StdinReader()
+        action, leftover = reader._read_escape_sequence("\x1b")
+        assert action == KeyAction.SWITCH_MODE_PREV
+        assert leftover == ""
+
+    def test_ctrl_up_sequence_parsed(self, monkeypatch):
+        self._feed(monkeypatch, "[1;5A")
+        reader = StdinReader()
+        action, leftover = reader._read_escape_sequence("\x1b")
+        assert action == KeyAction.PAGE_PREV
+        assert leftover == ""
+
+    def test_insert_key_dropped(self, monkeypatch):
+        # Insert sends ESC [ 2 ~ — an unmapped tilde-terminated CSI sequence.
+        # It must be consumed whole (no leftover) so "[2~" is never inserted.
+        self._feed(monkeypatch, "[2~")
+        reader = StdinReader()
+        action, leftover = reader._read_escape_sequence("\x1b")
+        assert action is None
+        assert leftover == ""
+
+    def test_fkey_csi_dropped(self, monkeypatch):
+        # F5 sends ESC [ 15 ~ — an unmapped tilde-terminated CSI sequence.
+        self._feed(monkeypatch, "[15~")
+        reader = StdinReader()
+        action, leftover = reader._read_escape_sequence("\x1b")
+        assert action is None
+        assert leftover == ""
+
+    def test_fkey_ss3_dropped(self, monkeypatch):
+        # F1 sends ESC O P — an unmapped letter-terminated SS3 sequence.
+        self._feed(monkeypatch, "OP")
+        reader = StdinReader()
+        action, leftover = reader._read_escape_sequence("\x1b")
+        assert action is None
+        assert leftover == ""
+
+    def test_unmapped_csi_letter_dropped(self, monkeypatch):
+        # An arbitrary unmapped letter-terminated CSI (e.g. ESC [ G) drops.
+        self._feed(monkeypatch, "[G")
+        reader = StdinReader()
+        action, leftover = reader._read_escape_sequence("\x1b")
+        assert action is None
+        assert leftover == ""
+
+    def test_alt_letter_still_leaks_char(self, monkeypatch):
+        # Regression guard: Alt+<letter> (ESC + letter) must still leak its
+        # byte so the keystroke is not silently dropped.
+        self._feed(monkeypatch, "a")
+        reader = StdinReader()
+        action, leftover = reader._read_escape_sequence("\x1b")
+        assert action is None
+        assert "a" in leftover
+
+    def test_mapped_delete_still_works(self, monkeypatch):
+        # Delete (ESC [ 3 ~) is mapped and must still resolve, not be dropped.
+        self._feed(monkeypatch, "[3~")
+        reader = StdinReader()
+        action, leftover = reader._read_escape_sequence("\x1b")
+        assert action == KeyAction.DELETE
+        assert leftover == ""

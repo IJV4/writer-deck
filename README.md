@@ -123,7 +123,7 @@ font_size: 14
 
 ## Display Refresh
 
-Writer Deck uses four e-ink waveform modes, selected automatically:
+Writer Deck uses three e-ink waveform modes, selected automatically:
 
 | Mode | Speed | When |
 |------|-------|------|
@@ -202,7 +202,7 @@ The systemd unit's `WorkingDirectory`/`ExecStart`/`ExecStopPost` point at the
 
 ```bash
 # Deploy: rsync into releases/<ts>/, swap `current`, restart, prune old releases.
-./deploy.sh [PI_HOST] [PI_USER]        # defaults: writerdeck.local pi
+./deploy.sh [PI_HOST] [PI_USER]        # defaults: writer-deck.local pi
 
 # List releases and the active one:
 ./deploy.sh --list [PI_HOST] [PI_USER]

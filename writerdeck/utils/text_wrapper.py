@@ -9,8 +9,15 @@ _wrap_cache: dict[tuple[str, str, int, int], list[str]] = {}
 
 
 def clear_wrap_cache() -> None:
-    """Clear the per-line wrap cache."""
+    """Clear the font-dependent wrap and per-character width caches.
+
+    Both are keyed on ``id(font)``; call this on any font change so a reused
+    ``id()`` (after the font LRU evicts + GC frees the old font) can't return
+    a stale width. The glyph-bitmap cache is cleared separately via
+    ``glyph_cache.clear_glyph_cache()``.
+    """
     _wrap_cache.clear()
+    _char_width_cache.clear()
 
 
 def wrap_lines(
@@ -61,7 +68,12 @@ def wrap_lines(
                     end = start + len(sub)
                     if cursor_col <= end or i == len(sub_lines) - 1:
                         new_cursor_line = len(wrapped) + i
-                        new_cursor_col = cursor_col - start
+                        # Clamp to >= 0 as a belt-and-suspenders guard: a
+                        # nonzero first-sub-line offset (e.g. from stripped
+                        # leading whitespace) would otherwise map a cursor
+                        # inside that offset to a negative column, which the
+                        # renderer slices with line_text[:negative].
+                        new_cursor_col = max(0, cursor_col - start)
                         break
 
             for sub, start in zip(sub_lines, offsets):
@@ -173,6 +185,23 @@ def _wrap_single_line(line: str, font, max_width_px: int) -> list[str]:
     """
     if _text_width(font, line) <= max_width_px:
         return [line]
+
+    # Preserve leading whitespace: line.split(" ") discards it, which would
+    # (a) drop the visible indentation and (b) make the first wrapped sub-line
+    # start at a nonzero offset within the doc line (_subline_offsets locates
+    # sub-lines via str.find), so wrap_lines' cursor_col - start goes negative
+    # for a cursor inside the indent. Wrap the un-indented remainder, then
+    # re-attach the indent to the first sub-line so its offset is 0.
+    stripped = line.lstrip(" ")
+    indent_len = len(line) - len(stripped)
+    if indent_len:
+        indent = line[:indent_len]
+        sub_lines = _wrap_single_line(stripped, font, max_width_px)
+        # If the indent itself plus the first word overflows, the indent still
+        # renders on the first sub-line; additive advances mean the indent's
+        # width is simply prepended and the remaining words re-flow after it.
+        sub_lines[0] = indent + sub_lines[0]
+        return sub_lines
 
     space_width = _text_width(font, " ")
     words = line.split(" ")

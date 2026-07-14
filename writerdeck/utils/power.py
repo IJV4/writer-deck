@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-import os
 import socket
+import subprocess
 import threading
 import time
 from collections import deque
@@ -59,6 +59,12 @@ class Power:
 
     def stop(self) -> None:
         self._running = False
+        # Join the monitor thread for graceful shutdown. Use a short timeout so a
+        # thread blocked in a socket op / long check_interval sleep can't hang
+        # shutdown — the thread is a daemon, so a timed-out join is still safe.
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2)
 
     @property
     def available(self) -> bool:
@@ -103,14 +109,23 @@ class Power:
             return None
 
     def _update(self) -> None:
-        # Battery level
+        # Battery level. A failed query (dead socket / no daemon) must mark the
+        # data stale so a frozen critical+not-charging reading can't count toward
+        # the shutdown debounce — otherwise a dead socket could trigger poweroff
+        # entirely from last-known values. We only consider this cycle a success
+        # once we've parsed a fresh battery level.
+        fresh = False
         resp = self._query("get battery")
         if resp and ":" in resp:
             try:
                 self.battery_level = int(float(resp.split(":")[1].strip()))
-                self._available = True
+                fresh = True
             except (ValueError, IndexError):
                 pass
+
+        # Availability reflects whether *this* cycle got a fresh reading. A
+        # recovered socket restores availability; a failed one clears it.
+        self._available = fresh
 
         # Charging status
         resp = self._query("get battery_charging")
@@ -155,6 +170,12 @@ class Power:
                 # win the race against high-voltage panel damage.
                 if self._shutdown_callback:
                     try:
+                        # NOTE: this runs on the monitor thread (not the main
+                        # app/render thread). The callback deep-sleeps the panel
+                        # via the display driver, so it touches the SPI bus
+                        # concurrently with any in-flight render; thread-safety
+                        # relies on the driver's internal SPI lock serialising
+                        # those hardware ops.
                         self._shutdown_callback()
                         logger.info(
                             "Emergency callback complete (panel slept) — issuing poweroff"
@@ -168,7 +189,21 @@ class Power:
                         )
                 else:
                     logger.info("No emergency callback — issuing poweroff")
-                os.system("sudo systemctl poweroff")
+                try:
+                    result = subprocess.run(
+                        ["sudo", "systemctl", "poweroff"],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode != 0:
+                        logger.error(
+                            "poweroff exited %d: %s",
+                            result.returncode,
+                            result.stderr.strip(),
+                        )
+                except Exception:
+                    logger.exception("Failed to issue poweroff")
                 return
 
             time.sleep(self._check_interval)

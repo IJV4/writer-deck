@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from writerdeck.input.keymapper import KeyAction
 from writerdeck.modes.base_mode import RenderFrame
-from writerdeck.modes.font_picker import FontPickerOverlay
 from writerdeck.modes.file_picker import FilePickerOverlay
 from writerdeck.modes.find_overlay import FindOverlay
+from writerdeck.modes.font_picker import FontPickerOverlay
 
 
 def _base_frame() -> RenderFrame:
@@ -196,6 +196,32 @@ class TestFindOverlayRender:
         frame = overlay.render(_base_frame())
         replace_lines = [l for l in frame.text_lines if "Replace:" in l]
         assert any(l.startswith(">") for l in replace_lines)
+
+    def test_plain_tab_switches_focus(self):
+        """Plain Tab (evdev/pygame) switches Find/Replace focus, like Ctrl+Tab."""
+        overlay = FindOverlay()
+        assert overlay._in_replace_field is False
+        overlay.handle_input(KeyAction.TAB, "")
+        assert overlay._in_replace_field is True
+        overlay.handle_input(KeyAction.TAB, "")
+        assert overlay._in_replace_field is False
+
+    def test_plain_tab_switches_indicator(self):
+        overlay = FindOverlay()
+        overlay.handle_input(KeyAction.TAB, "")
+        frame = overlay.render(_base_frame())
+        replace_lines = [l for l in frame.text_lines if "Replace:" in l]
+        assert any(l.startswith(">") for l in replace_lines)
+
+    def test_plain_tab_routes_typed_text_to_replace(self):
+        overlay = FindOverlay()
+        for ch in "old":
+            overlay.handle_input(KeyAction.CHAR, ch)
+        overlay.handle_input(KeyAction.TAB, "")  # switch to replace via plain Tab
+        for ch in "new":
+            overlay.handle_input(KeyAction.CHAR, ch)
+        result = overlay.handle_input(KeyAction.ENTER, "")
+        assert result == {"find": "old", "replace": "new"}
 
     def test_enter_with_empty_search_returns_none(self):
         overlay = FindOverlay()

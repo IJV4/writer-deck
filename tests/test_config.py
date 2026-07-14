@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from unittest.mock import patch
 
-from writerdeck.core.config import _validate, _deep_merge, Config
+from writerdeck.core.config import Config, _deep_merge, _validate
 
 
 class TestValidation:
@@ -46,7 +44,7 @@ class TestValidation:
         data = {
             "unknown_key": "val",
             "font_size": "bad",
-            "render_interval_ms": 1,  # below range min=50
+            "autosave_interval_seconds": 1,  # below range min=10
         }
         warnings = _validate(data)
         assert len(warnings) == 3
@@ -157,9 +155,7 @@ class TestConfigProperties:
             "font_size": 14,
             "daily_goal_words": 500,
             "partial_refresh_max_streak": 20,
-            "render_interval_ms": 500,
             "idle_full_refresh_seconds": 10,
-            "display_sleep_minutes": 5,
             "keyboard_device": "auto",
             "keyboard_input": "auto",
             "mode_order": ["distraction_free", "dashboard"],
@@ -193,9 +189,6 @@ class TestConfigProperties:
     def test_partial_refresh_max_streak(self):
         assert self._config().partial_refresh_max_streak == 20
 
-    def test_render_interval_ms(self):
-        assert self._config().render_interval_ms == 500
-
     def test_idle_full_refresh_seconds(self):
         assert self._config().idle_full_refresh_seconds == 10
 
@@ -206,9 +199,6 @@ class TestConfigProperties:
     def test_full_refresh_max_seconds_override(self):
         c = self._config(full_refresh_max_seconds=120)
         assert c.full_refresh_max_seconds == 120
-
-    def test_display_sleep_minutes(self):
-        assert self._config().display_sleep_minutes == 5
 
     def test_display_idle_sleep_seconds_default(self):
         c = Config({"display_model": "x"})
@@ -311,6 +301,7 @@ class TestLoadConfig:
     def test_load_with_user_override(self, tmp_path):
         """Test that user config.yaml overrides defaults."""
         import yaml
+
         import writerdeck.core.config as config_module
 
         old_instance = config_module._instance
@@ -331,5 +322,71 @@ class TestLoadConfig:
             cfg = load_config(project_root=tmp_path)
             assert cfg.font_size == 20
             assert cfg.font_family == "Hack"  # not overridden
+        finally:
+            config_module._instance = old_instance
+
+    def test_broken_user_config_falls_back_to_defaults(self, tmp_path):
+        """A syntactically-broken user config.yaml must not crash startup; it is
+        ignored and the base defaults are used."""
+        import yaml
+
+        import writerdeck.core.config as config_module
+
+        old_instance = config_module._instance
+        config_module._instance = None
+        try:
+            default = {
+                "display_model": "epd7in5_V2",
+                "font_family": "Hack",
+                "font_size": 14,
+            }
+            (tmp_path / "config_default.yaml").write_text(yaml.dump(default))
+            # Invalid YAML (unbalanced brackets / bad indentation).
+            (tmp_path / "config.yaml").write_text("font_size: [1, 2\n  bad: : :\n")
+
+            from writerdeck.core.config import load_config
+            cfg = load_config(project_root=tmp_path)  # must not raise
+            assert cfg.font_size == 14
+            assert cfg.font_family == "Hack"
+        finally:
+            config_module._instance = old_instance
+
+    def test_broken_default_config_uses_builtin_defaults(self, tmp_path):
+        """If even the base config_default.yaml is malformed, load_config must
+        not crash — it falls back to the Config property defaults."""
+        import writerdeck.core.config as config_module
+
+        old_instance = config_module._instance
+        config_module._instance = None
+        try:
+            (tmp_path / "config_default.yaml").write_text("bad: : [\n  nope\n")
+
+            from writerdeck.core.config import load_config
+            cfg = load_config(project_root=tmp_path)  # must not raise
+            # Property-level defaults still apply.
+            assert cfg.keyboard_input == "auto"
+            assert cfg.show_title_bar is True
+        finally:
+            config_module._instance = old_instance
+        """An explicit project_root must (re)load from that tree, not hand back
+        a cached singleton loaded from a different root."""
+        import yaml
+
+        import writerdeck.core.config as config_module
+
+        old_instance = config_module._instance
+        config_module._instance = None
+        try:
+            from writerdeck.core.config import load_config
+            # Prime the singleton from the real project root.
+            primed = load_config()
+            # A minimal config in a different tree must win, not the singleton.
+            default = {"display_model": "epd7in5_V2", "font_family": "Courier", "font_size": 20}
+            (tmp_path / "config_default.yaml").write_text(yaml.dump(default))
+            cfg = load_config(project_root=tmp_path)
+            assert cfg is not primed
+            assert cfg.font_family == "Courier"
+            # No-arg calls now return the most recently loaded instance.
+            assert load_config() is cfg
         finally:
             config_module._instance = old_instance

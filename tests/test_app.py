@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import os
-import queue
 import time
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from writerdeck.core.config import Config, _deep_merge
 
@@ -19,9 +16,7 @@ def _make_config(overrides: dict | None = None) -> Config:
         "font_size": 14,
         "daily_goal_words": 500,
         "partial_refresh_max_streak": 20,
-        "render_interval_ms": 100,
         "idle_full_refresh_seconds": 10,
-        "display_sleep_minutes": 0,
         "keyboard_device": "auto",
         "keyboard_input": "stdin",
         "mode_order": ["distraction_free", "dashboard", "typewriter"],
@@ -92,8 +87,8 @@ class TestHandleAction:
     @patch("writerdeck.core.app.detect_platform")
     @patch("writerdeck.core.app.create_driver")
     def test_save_sets_status(self, mock_driver, mock_platform, mock_config, tmp_path):
-        from writerdeck.utils.platform import HardwareProfile
         from writerdeck.input.keymapper import KeyAction
+        from writerdeck.utils.platform import HardwareProfile
 
         mock_config.return_value = _make_config(
             {"documents_dir": str(tmp_path)}
@@ -117,8 +112,8 @@ class TestHandleAction:
     @patch("writerdeck.core.app.detect_platform")
     @patch("writerdeck.core.app.create_driver")
     def test_mode_switch(self, mock_driver, mock_platform, mock_config, tmp_path):
-        from writerdeck.utils.platform import HardwareProfile
         from writerdeck.input.keymapper import KeyAction
+        from writerdeck.utils.platform import HardwareProfile
 
         mock_config.return_value = _make_config(
             {"documents_dir": str(tmp_path)}
@@ -139,8 +134,8 @@ class TestHandleAction:
     @patch("writerdeck.core.app.detect_platform")
     @patch("writerdeck.core.app.create_driver")
     def test_mode_switch_prev(self, mock_driver, mock_platform, mock_config, tmp_path):
-        from writerdeck.utils.platform import HardwareProfile
         from writerdeck.input.keymapper import KeyAction
+        from writerdeck.utils.platform import HardwareProfile
 
         mock_config.return_value = _make_config(
             {"documents_dir": str(tmp_path)}
@@ -161,8 +156,8 @@ class TestHandleAction:
     @patch("writerdeck.core.app.detect_platform")
     @patch("writerdeck.core.app.create_driver")
     def test_new_doc_resets(self, mock_driver, mock_platform, mock_config, tmp_path):
-        from writerdeck.utils.platform import HardwareProfile
         from writerdeck.input.keymapper import KeyAction
+        from writerdeck.utils.platform import HardwareProfile
 
         mock_config.return_value = _make_config(
             {"documents_dir": str(tmp_path)}
@@ -186,8 +181,8 @@ class TestHandleAction:
     @patch("writerdeck.core.app.detect_platform")
     @patch("writerdeck.core.app.create_driver")
     def test_escape_returns_false(self, mock_driver, mock_platform, mock_config, tmp_path):
-        from writerdeck.utils.platform import HardwareProfile
         from writerdeck.input.keymapper import KeyAction
+        from writerdeck.utils.platform import HardwareProfile
 
         mock_config.return_value = _make_config(
             {"documents_dir": str(tmp_path)}
@@ -207,8 +202,8 @@ class TestHandleAction:
 class TestOverlayDispatch:
     def _make_app(self, tmp_path):
         """Helper to construct an App with full mocking."""
-        from writerdeck.utils.platform import HardwareProfile
         from writerdeck.core.app import App
+        from writerdeck.utils.platform import HardwareProfile
 
         with patch("writerdeck.core.app.get_config") as mc, \
              patch("writerdeck.core.app.detect_platform") as mp, \
@@ -265,7 +260,6 @@ class TestOverlayDispatch:
         assert app._overlay is None
 
     def test_handle_overlay_result_open_doc(self, tmp_path):
-        from writerdeck.input.keymapper import KeyAction
 
         app = self._make_app(tmp_path)
         # Create a doc file first
@@ -273,6 +267,27 @@ class TestOverlayDispatch:
         doc_path.write_text("Hello from file")
         app._handle_overlay_result({"open_doc": "my-doc"})
         assert app._doc.name == "my-doc"
+
+    def test_handle_overlay_result_rename_repoints_last_open(self, tmp_path):
+        # Renaming the ACTIVE doc must repoint .last_open so it reopens after a
+        # restart (previously only _doc.name was updated, leaving .last_open stale).
+        app = self._make_app(tmp_path)
+        (tmp_path / "my-doc.txt").write_text("content")
+        app._handle_overlay_result({"open_doc": "my-doc"})
+        # The file picker performs the on-disk rename, then returns the result.
+        app._file_mgr.rename("my-doc", "renamed-doc")
+        app._handle_overlay_result({"renamed": {"from": "my-doc", "to": "renamed-doc"}})
+        assert app._doc.name == "renamed-doc"
+        assert app._file_mgr.load_last_open() == "renamed-doc"
+
+    def test_handle_overlay_result_rename_inactive_leaves_last_open(self, tmp_path):
+        # Renaming a NON-active doc must not touch the active doc or .last_open.
+        app = self._make_app(tmp_path)
+        (tmp_path / "active.txt").write_text("a")
+        app._handle_overlay_result({"open_doc": "active"})
+        app._handle_overlay_result({"renamed": {"from": "other", "to": "other2"}})
+        assert app._doc.name == "active"
+        assert app._file_mgr.load_last_open() == "active"
 
     def test_handle_overlay_result_font(self, tmp_path):
         app = self._make_app(tmp_path)
@@ -362,8 +377,8 @@ class TestOverlayDispatch:
 
 class TestOnAnyKey:
     def _make_app(self, tmp_path):
-        from writerdeck.utils.platform import HardwareProfile
         from writerdeck.core.app import App
+        from writerdeck.utils.platform import HardwareProfile
 
         with patch("writerdeck.core.app.get_config") as mc, \
              patch("writerdeck.core.app.detect_platform") as mp, \
@@ -409,8 +424,8 @@ class TestOnAnyKey:
 
 class TestSleepTiers:
     def _make_app(self, tmp_path):
-        from writerdeck.utils.platform import HardwareProfile
         from writerdeck.core.app import App
+        from writerdeck.utils.platform import HardwareProfile
 
         with patch("writerdeck.core.app.get_config") as mc, \
              patch("writerdeck.core.app.detect_platform") as mp, \
@@ -444,18 +459,27 @@ class TestSleepTiers:
         app._exit_cpu_powersave()
         assert app._tier2_active is False
 
-    @patch("os.system")
-    def test_enter_system_suspend(self, mock_system, tmp_path):
+    @patch("writerdeck.core.app.subprocess.run")
+    def test_enter_system_suspend(self, mock_run, tmp_path):
+        import time as _time
+        mock_run.return_value.returncode = 0
         app = self._make_app(tmp_path)
+        before = _time.monotonic()
         app._enter_system_suspend()
-        assert app._tier3_active is True
-        mock_system.assert_called_once_with("systemctl suspend")
+        # systemctl suspend blocks until resume; on return the idle ladder is
+        # re-armed (tier flags cleared, last_keypress reset to "now") so it can
+        # fire again even without an evdev resume key event.
+        assert app._tier3_active is False
+        assert app._tier2_active is False
+        assert app._last_keypress >= before
+        mock_run.assert_called_once()
+        assert mock_run.call_args.args[0] == ["systemctl", "suspend"]
 
 
 class TestWatchdog:
     def _make_app(self, tmp_path, notify_socket=None):
-        from writerdeck.utils.platform import HardwareProfile
         from writerdeck.core.app import App
+        from writerdeck.utils.platform import HardwareProfile
 
         env = {"NOTIFY_SOCKET": notify_socket} if notify_socket else {}
         with patch("writerdeck.core.app.get_config") as mc, \
@@ -499,8 +523,8 @@ class TestWatchdog:
 
 class TestExportUSB:
     def _make_app(self, tmp_path):
-        from writerdeck.utils.platform import HardwareProfile
         from writerdeck.core.app import App
+        from writerdeck.utils.platform import HardwareProfile
 
         with patch("writerdeck.core.app.get_config") as mc, \
              patch("writerdeck.core.app.detect_platform") as mp, \
@@ -533,8 +557,8 @@ class TestIdleDisplaySleep:
     """LONG-1: aggressive panel idle-sleep after display_idle_sleep_seconds."""
 
     def _make_app(self, tmp_path, overrides=None):
-        from writerdeck.utils.platform import HardwareProfile
         from writerdeck.core.app import App
+        from writerdeck.utils.platform import HardwareProfile
 
         base_overrides = {
             "documents_dir": str(tmp_path),
@@ -607,6 +631,7 @@ class TestIdleDisplaySleep:
 
     def test_key_wakes_and_full_refreshes(self, tmp_path):
         import time as _time
+
         from writerdeck.input.keymapper import KeyAction
 
         app = self._make_app(tmp_path)
@@ -847,7 +872,7 @@ class TestScreensaver:
             tmp_path,
             {
                 "display_idle_sleep_seconds": 20,
-                "display_screensaver_seconds": 20,
+                "display_screensaver_seconds": 10,  # fires before the 20s sleep
                 "sleep_tiers": {
                     "display_off_minutes": 5,
                     "cpu_powersave_minutes": 0,
@@ -855,7 +880,7 @@ class TestScreensaver:
                 },
             },
         )
-        app._last_keypress = time.monotonic() - 25  # past the idle threshold
+        app._last_keypress = time.monotonic() - 25  # past both thresholds
         self._run_loop(app, ticks=1)
         # The last displayed frame before sleep was the white/paused frame, and
         # then the panel deep-slept.
@@ -895,3 +920,299 @@ class TestScreensaver:
         app._driver.display_full.side_effect = DisplayError("dead")
         app._show_screensaver()
         assert app._headless is True
+
+
+def _run_loop(app, ticks, on_tick=None):
+    """Run the real main loop for a fixed number of iterations, then stop."""
+    from unittest.mock import MagicMock as _MM
+    state = {"n": 0}
+
+    def fake_wait(timeout=None):
+        state["n"] += 1
+        if on_tick is not None:
+            on_tick(state["n"])
+        if state["n"] >= ticks:
+            app._running = False
+        return True
+
+    app._wakeup.wait = fake_wait  # type: ignore[assignment]
+    app._keyboard.start = _MM()  # type: ignore[method-assign]
+    app._keyboard.stop = _MM()  # type: ignore[method-assign]
+    app._power.start = _MM()  # type: ignore[method-assign]
+    app._power.stop = _MM()  # type: ignore[method-assign]
+    app.run()
+
+
+class TestAutosaveGuard:
+    """HIGH: a failing autosave (disk full / read-only) must not crash the loop."""
+
+    def test_autosave_oserror_is_caught_and_loop_continues(self, tmp_path):
+        app = _make_app_with(tmp_path)
+        app._file_mgr.maybe_autosave = MagicMock(  # type: ignore[method-assign]
+            side_effect=OSError("No space left on device")
+        )
+        # Must run several ticks without raising despite every autosave failing.
+        _run_loop(app, ticks=3)
+        assert app._file_mgr.maybe_autosave.call_count >= 3
+        assert app._status.current == "Autosave failed — retrying"
+
+
+class TestSaveGuard:
+    """HIGH: an explicit SAVE that hits an OSError stays alive and shows failure."""
+
+    def test_save_oserror_shows_failure(self, tmp_path):
+        from writerdeck.input.keymapper import KeyAction
+        app = _make_app_with(tmp_path)
+        # Pre-create so SAVE doesn't route to the name overlay.
+        (tmp_path / "d.txt").write_text("x")
+        app._doc.load("x", "d")
+        app._file_mgr.save = MagicMock(side_effect=OSError("read-only fs"))  # type: ignore[method-assign]
+        # Must not raise.
+        app._handle_action(KeyAction.SAVE, "")
+        assert app._status.current == "Save failed"
+
+    def test_save_as_oserror_shows_failure(self, tmp_path):
+        app = _make_app_with(tmp_path)
+        app._file_mgr.save = MagicMock(side_effect=OSError("read-only fs"))  # type: ignore[method-assign]
+        app._handle_overlay_result({"save_as": "newname"})
+        assert app._status.current == "Save failed"
+        # The doc name still updated even though the write failed.
+        assert app._doc.name == "newname"
+
+
+class TestRenderFaultDefense:
+    """HIGH: a non-DisplayError render fault skips the frame, never crashes."""
+
+    def test_render_exception_skips_frame_no_headless(self, tmp_path):
+        from writerdeck.input.keymapper import KeyAction
+        app = _make_app_with(tmp_path)
+        app._mode.render = MagicMock(  # type: ignore[method-assign]
+            side_effect=ValueError("corrupt daily.json")
+        )
+
+        def on_tick(n):
+            if n == 1:
+                app._on_any_key()
+                app._keyboard.queue.put((KeyAction.CHAR, "a"))
+
+        _run_loop(app, ticks=2, on_tick=on_tick)
+        # Non-display fault must NOT go headless (headless is panel-only).
+        assert app._headless is False
+        assert app._status.current == "Render error — skipped frame"
+
+
+class TestLowBatteryWarning:
+    """MEDIUM: low battery surfaces a warning once per episode + forces a render."""
+
+    def _low_batt_app(self, tmp_path):
+        app = _make_app_with(tmp_path, {"enable_battery_monitor": True})
+        app._power._available = True
+        return app
+
+    def test_low_battery_warns_once_and_forces_render(self, tmp_path):
+        app = self._low_batt_app(tmp_path)
+        app._power.is_low = True
+        _run_loop(app, ticks=2)
+        assert app._low_batt_warned is True
+        assert app._status.current == "Low battery — save soon"
+        # A render was forced so an idle user sees the warning.
+        app._driver.display_full.assert_called()
+
+    def test_low_battery_wakes_sleeping_panel(self, tmp_path):
+        app = self._low_batt_app(tmp_path)
+        app._power.is_low = True
+        app._display_sleeping = True
+        _run_loop(app, ticks=1)
+        app._driver.wake.assert_called()
+        assert app._display_sleeping is False
+
+    def test_low_battery_flag_resets_when_recovered(self, tmp_path):
+        app = self._low_batt_app(tmp_path)
+        app._low_batt_warned = True
+        app._power.is_low = False
+        _run_loop(app, ticks=1)
+        assert app._low_batt_warned is False
+
+
+class TestDeepCleanOnWake:
+    """LOW: a long panel sleep forces a GC16 deep-clean on the next full refresh."""
+
+    def test_long_sleep_forces_deep_clean(self, tmp_path):
+        app = _make_app_with(tmp_path, {"idle_deep_clean_seconds": 300})
+        # Simulate a panel that slept long enough to accumulate ghosting.
+        app._display_sleeping = True
+        app._needs_display_wake = True
+        app._sleep_started_at = time.monotonic() - 400  # > 300s asleep
+        app._render_and_refresh = MagicMock()  # type: ignore[method-assign]
+        from writerdeck.input.keymapper import KeyAction
+
+        def on_tick(n):
+            if n == 1:
+                app._display_sleeping = False
+                app._keyboard.queue.put((KeyAction.CHAR, "a"))
+
+        # ticks=2: on_tick fires at the *end* of tick 1 (inside fake_wait), so
+        # the queued key is only drained and rendered on tick 2.
+        _run_loop(app, ticks=2, on_tick=on_tick)
+        assert app._force_deep_clean is True
+
+    def test_deep_clean_flag_selects_display_clean(self, tmp_path):
+        app = _make_app_with(tmp_path, {"idle_deep_clean_seconds": 300})
+        app._force_deep_clean = True
+        app._refresh.request_full()
+        app._render_and_refresh(force_full=True)
+        app._driver.display_clean.assert_called()
+        # One-shot flag consumed.
+        assert app._force_deep_clean is False
+
+    def test_short_sleep_no_deep_clean(self, tmp_path):
+        app = _make_app_with(tmp_path, {"idle_deep_clean_seconds": 300})
+        app._display_sleeping = True
+        app._needs_display_wake = True
+        app._sleep_started_at = time.monotonic() - 30  # short nap
+        app._render_and_refresh = MagicMock()  # type: ignore[method-assign]
+        from writerdeck.input.keymapper import KeyAction
+
+        def on_tick(n):
+            if n == 1:
+                app._display_sleeping = False
+                app._keyboard.queue.put((KeyAction.CHAR, "a"))
+
+        # ticks=2: see test_long_sleep_forces_deep_clean — ticks=1 never
+        # exercises the wake path at all, making the assertion vacuous.
+        _run_loop(app, ticks=2, on_tick=on_tick)
+        assert app._force_deep_clean is False
+
+
+class TestScreensaverKnob:
+    """LOW: screensaver fires at its configured time, warns if it can never fire."""
+
+    def test_screensaver_disabled_warning_when_ge_sleep(self, tmp_path, caplog):
+        import logging as _logging
+        app = _make_app_with(
+            tmp_path,
+            {
+                "display_idle_sleep_seconds": 20,
+                "display_screensaver_seconds": 20,  # == sleep → can't fire first
+                "sleep_tiers": {
+                    "display_off_minutes": 5,
+                    "cpu_powersave_minutes": 0,
+                    "system_suspend_minutes": 0,
+                },
+            },
+        )
+        app._last_keypress = time.monotonic() - 25
+        with caplog.at_level(_logging.WARNING):
+            _run_loop(app, ticks=1)
+        assert app._screensaver_disabled_warned is True
+        # Screensaver never fired because it's disabled by the earlier sleep.
+        assert app._screensaver_shown is False
+        assert any("screensaver disabled" in r.message for r in caplog.records)
+
+    def test_screensaver_fires_at_configured_time(self, tmp_path):
+        app = _make_app_with(
+            tmp_path,
+            {
+                "display_idle_sleep_seconds": 60,
+                "display_screensaver_seconds": 20,  # < sleep → fires
+                "sleep_tiers": {
+                    "display_off_minutes": 5,
+                    "cpu_powersave_minutes": 0,
+                    "system_suspend_minutes": 0,
+                },
+            },
+        )
+        # 25s idle: past the 20s screensaver but before the 60s sleep.
+        app._last_keypress = time.monotonic() - 25
+        _run_loop(app, ticks=1)
+        assert app._screensaver_shown is True
+        # Panel not yet asleep (sleep is at 60s).
+        assert app._display_sleeping is False
+
+
+class TestSuspendRearm:
+    """MEDIUM: tier-3 suspend re-arms the idle ladder on resume."""
+
+    @patch("writerdeck.core.app.subprocess.run")
+    def test_suspend_rearms_tiers(self, mock_run, tmp_path):
+        mock_run.return_value.returncode = 0
+        app = _make_app_with(tmp_path)
+        app._tier2_active = True
+        app._tier3_active = True
+        before = time.monotonic()
+        app._enter_system_suspend()
+        assert app._tier3_active is False
+        assert app._tier2_active is False
+        assert app._last_keypress >= before
+
+
+class TestPygameDriverOrdering:
+    """LOW: keyboard_input=='pygame' builds PygameDriver once, no EPaper leak."""
+
+    def test_pygame_builds_pygame_driver_not_create_driver(self, tmp_path):
+        from unittest.mock import MagicMock as _MM
+
+        from writerdeck.core.app import App
+        from writerdeck.utils.platform import HardwareProfile
+
+        overrides = {"documents_dir": str(tmp_path), "keyboard_input": "pygame"}
+        with patch("writerdeck.core.app.get_config") as mc, \
+             patch("writerdeck.core.app.detect_platform") as mp, \
+             patch("writerdeck.core.app.create_driver") as md, \
+             patch("writerdeck.display.pygame_driver.PygameDriver") as mpg, \
+             patch("writerdeck.input.pygame_reader.PygameKeyboardReader") as mpr:
+            mc.return_value = _make_config(overrides)
+            # Pretend we're on a Pi so the bug (EPaper created then overwritten)
+            # would be exercised if the ordering were wrong.
+            mp.return_value = HardwareProfile(
+                name="pi-zero-2w", is_pi=True, is_pi_zero=True,
+                partial_refresh_max_streak=50, render_interval_ms=100, font_size=16,
+            )
+            md.return_value = _MM()
+            mpg.return_value = _MM()
+            mpr.return_value = _MM()
+            app = App()
+            # The EPaper/Null driver factory must NOT have been called at all —
+            # no SPI/GPIO opened then leaked.
+            md.assert_not_called()
+            mpg.assert_called_once()
+            assert app._driver is mpg.return_value
+
+
+class TestPanelRecoveryDoubleRender:
+    """LOW: recovery-render + loop-render must not double full-refresh."""
+
+    def test_recovery_render_skips_loop_render(self, tmp_path):
+        from writerdeck.input.keymapper import KeyAction
+        app = _make_app_with(tmp_path)
+        app._headless = True
+        app._last_headless_retry = time.monotonic() - 100  # retry will fire
+        app._driver.init.side_effect = None  # recovery succeeds
+
+        def on_tick(n):
+            if n == 1:
+                # Queue input so, without the fix, the loop would render again.
+                app._on_any_key()
+                app._keyboard.queue.put((KeyAction.CHAR, "a"))
+
+        _run_loop(app, ticks=1, on_tick=on_tick)
+        assert app._headless is False
+        # 2 unconditional startup calls (splash + the initial forced render in
+        # run(), which happen before the loop's headless-retry logic ever
+        # runs) + 1 recovery render == 3. Without the fix, the loop's own
+        # gated render would fire too, making this 4.
+        assert app._driver.display_full.call_count == 3
+
+    def test_maybe_retry_panel_returns_true_on_recovery(self, tmp_path):
+        app = _make_app_with(tmp_path)
+        app._headless = True
+        app._last_headless_retry = time.monotonic() - 100
+        app._driver.init.side_effect = None
+        assert app._maybe_retry_panel() is True
+
+    def test_maybe_retry_panel_returns_false_when_still_dead(self, tmp_path):
+        app = _make_app_with(tmp_path)
+        app._headless = True
+        app._last_headless_retry = time.monotonic() - 100
+        app._driver.init.side_effect = RuntimeError("dead")
+        assert app._maybe_retry_panel() is False
