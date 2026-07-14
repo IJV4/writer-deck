@@ -1,7 +1,7 @@
 """Tests for splash screen rendering."""
 
+from writerdeck.display.driver import HEIGHT, WIDTH
 from writerdeck.display.splash import render_paused, render_splash
-from writerdeck.display.driver import WIDTH, HEIGHT
 
 
 class TestSplash:

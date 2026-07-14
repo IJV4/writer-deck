@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PIL import Image
 
-from writerdeck.display.driver import WIDTH, HEIGHT
+from writerdeck.display.driver import HEIGHT, WIDTH
 from writerdeck.display.renderer import render
 from writerdeck.modes.base_mode import RenderFrame
 

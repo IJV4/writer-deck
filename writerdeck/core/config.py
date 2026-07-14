@@ -22,10 +22,8 @@ _SCHEMA: dict[str, tuple[tuple[type, ...], tuple[Any, Any] | None]] = {
     "font_size": ((int, float), (6, 72)),
     "daily_goal_words": ((int, float), (0, 100000)),
     "partial_refresh_max_streak": ((int, float), (1, 1000)),
-    "render_interval_ms": ((int, float), (50, 10000)),
     "idle_full_refresh_seconds": ((int, float), (1, 600)),
     "full_refresh_max_seconds": ((int, float), (1, 86400)),
-    "display_sleep_minutes": ((int, float), (0, 1440)),
     "display_idle_sleep_seconds": ((int, float), (0, 86400)),
     "display_screensaver_seconds": ((int, float), (0, 86400)),
     "keyboard_device": ((str,), None),
@@ -105,20 +103,12 @@ class Config:
         return int(self._data["partial_refresh_max_streak"])
 
     @property
-    def render_interval_ms(self) -> int:
-        return int(self._data["render_interval_ms"])
-
-    @property
     def idle_full_refresh_seconds(self) -> int:
         return int(self._data["idle_full_refresh_seconds"])
 
     @property
     def full_refresh_max_seconds(self) -> int:
         return int(self._data.get("full_refresh_max_seconds", 300))
-
-    @property
-    def display_sleep_minutes(self) -> int:
-        return int(self._data["display_sleep_minutes"])
 
     @property
     def display_idle_sleep_seconds(self) -> int:
@@ -194,22 +184,50 @@ class Config:
 
 
 def load_config(project_root: Path | None = None) -> Config:
-    """Load and merge configuration, returning a singleton Config instance."""
+    """Load and merge configuration, returning a singleton Config instance.
+
+    With no ``project_root`` the process-wide singleton is returned (created on
+    first use). An explicit ``project_root`` always (re)loads from that
+    directory and refreshes the singleton, so a caller/test can point at a
+    different tree without being silently handed a cached instance from another
+    root.
+    """
     global _instance
-    if _instance is not None:
+    if project_root is None and _instance is not None:
         return _instance
 
     root = project_root or _PROJECT_ROOT
     default_path = root / "config_default.yaml"
     user_path = root / "config.yaml"
 
-    with open(default_path) as f:
-        data = yaml.safe_load(f) or {}
+    try:
+        with open(default_path) as f:
+            data = yaml.safe_load(f) or {}
+    except (yaml.YAMLError, OSError) as exc:
+        # The base config should always be valid & present. If it isn't, we
+        # can't merge anything meaningful — log loudly and fall back to an
+        # empty dict so the Config's property defaults take over.
+        logger.error(
+            "Config: FAILED to load base config %s (%s) — using built-in defaults",
+            default_path,
+            exc,
+        )
+        data = {}
 
     if user_path.exists():
-        with open(user_path) as f:
-            overrides = yaml.safe_load(f) or {}
-        data = _deep_merge(data, overrides)
+        try:
+            with open(user_path) as f:
+                overrides = yaml.safe_load(f) or {}
+            data = _deep_merge(data, overrides)
+        except (yaml.YAMLError, OSError) as exc:
+            # A hand-edited user config.yaml with a syntax error must not crash
+            # the app at startup. Warn loudly and ignore the broken file,
+            # keeping the base defaults.
+            logger.warning(
+                "Config: IGNORING broken user config %s (%s) — using defaults",
+                user_path,
+                exc,
+            )
 
     # Validate and log warnings
     warnings = _validate(data)

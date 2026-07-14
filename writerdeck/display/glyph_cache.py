@@ -21,6 +21,18 @@ _glyph_cache: dict[tuple[int, str], tuple[Image.Image, tuple[int, int], float]] 
 _THRESHOLD = 128
 
 
+def clear_glyph_cache() -> None:
+    """Drop all cached glyph bitmaps.
+
+    Entries are keyed on ``id(font)``. After a font change the old
+    FreeTypeFont may be evicted from ``fonts.get_font``'s LRU and garbage
+    collected, freeing its address for reuse by a *different* font — at which
+    point stale entries would render the wrong glyph. Call this whenever the
+    active font changes (see the App font-change handler).
+    """
+    _glyph_cache.clear()
+
+
 def _get_glyph(font, ch: str) -> tuple[Image.Image, tuple[int, int], float]:
     key = (id(font), ch)
     entry = _glyph_cache.get(key)

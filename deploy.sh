@@ -39,7 +39,7 @@ KEEP_RELEASES=5                             # prune: keep this many newest relea
 SSH_TARGET="${PI_USER}@${PI_HOST}"
 
 if [ "$ACTION" = "help" ]; then
-    sed -n '2,30p' "$0"
+    sed -n '2,21p' "$0"
     exit 0
 fi
 
@@ -82,10 +82,12 @@ cur="$(basename "$(readlink "$CURRENT")")"
 # dir, which bumps mtime on every restart regardless of how old the release
 # actually is). Every release name, with or without a prefix, ends in exactly
 # 15 characters of YYYYMMDD-HHMMSS, so that suffix alone is the sort key.
+# `|| true` keeps the pipeline (grep exits 1 when nothing but $cur is present)
+# from tripping `set -o pipefail`/errexit before the explicit guard below runs.
 prev="$(
     ls -1 "$RELEASES" | grep -vxF "$cur" | while IFS= read -r d; do
         printf '%s %s\n' "${d: -15}" "$d"
-    done | sort | tail -n1 | cut -d' ' -f2-
+    done | sort | tail -n1 | cut -d' ' -f2- || true
 )"
 [ -n "$prev" ] || { echo "  ERROR: no previous release to roll back to (only '$cur')." >&2; exit 1; }
 echo "  current: $cur  ->  rolling back to: $prev"
@@ -205,8 +207,14 @@ if [ -d "$RELEASES" ]; then
     if [ "$total" -gt "$KEEP" ]; then
         drop=$(( total - KEEP ))          # number of oldest releases to remove
         i=0
-        # Oldest-first (sort ascending): the first $drop are the stale ones.
-        ls -1 "$RELEASES" | sort | while IFS= read -r name; do
+        # Oldest-first by the trailing YYYYMMDD-HHMMSS timestamp — the SAME key
+        # the rollback block uses, and for the same reason: a plain lexical
+        # `sort` ranks the one-time "setup-<ts>" release newest ("s" > "2") and
+        # would keep it forever while pruning a genuinely newer release in its
+        # place. Sorting on the 15-char suffix makes "oldest" mean oldest.
+        ls -1 "$RELEASES" | while IFS= read -r d; do
+            printf '%s %s\n' "${d: -15}" "$d"
+        done | sort | cut -d' ' -f2- | while IFS= read -r name; do
             i=$(( i + 1 ))
             [ "$i" -le "$drop" ] || break
             [ -n "$name" ] || continue

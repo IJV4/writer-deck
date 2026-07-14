@@ -161,7 +161,7 @@ All saves use a temp file + fsync + rename pattern. If the system crashes mid-wr
 
 ### New Documents
 
-Ctrl+N creates a new file named `untitled-1.txt`, `untitled-2.txt`, etc. The previous document is autosaved first.
+Ctrl+N creates a new file auto-named from the current timestamp, `YYYY-MM-DD_HH-MM` (e.g. `2026-07-13_14-30`), using the extension set by `default_format` (`.txt` by default, or `.md`). If two documents are created within the same minute, a `-2`, `-3`, ... suffix is appended. The previous document is autosaved first.
 
 ### Undo / Redo
 
@@ -236,15 +236,17 @@ User values are deep-merged on top of defaults. Only include keys you want to ch
 display_model: epd7in5_V2          # Waveshare e-Paper model
 font_family: Hack                   # System font name
 font_size: 14                       # Font size in points
-render_interval_ms: 500             # Display update frequency (ms)
-partial_refresh_max_streak: 20      # Partial refreshes before a full one
+partial_refresh_max_streak: 5       # Partial refreshes before a full one
 idle_full_refresh_seconds: 10       # Full refresh after N seconds idle
+full_refresh_max_seconds: 300       # Wall-clock backstop: force a full refresh at least this often
+display_idle_sleep_seconds: 20      # Deep-sleep the panel after N seconds of no keystroke
+display_screensaver_seconds: 1800   # Blank to a white "paused" frame before long-idle deep sleep (0 = disabled)
 show_title_bar: true                # Show doc name at top
 idle_deep_clean_seconds: 300        # GC16 ghost-clear after N idle seconds (0 = disabled)
 
 # Writing
 daily_goal_words: 500               # Daily word count target
-default_format: txt                 # File extension for new docs
+default_format: txt                 # File extension for new documents (txt or md); existing docs keep their own extension
 
 # Modes
 mode_order:
@@ -261,9 +263,10 @@ keyboard_device: auto               # evdev device path or "auto"
 keyboard_input: auto                # auto | stdin | evdev | pygame
 
 # Power
-display_sleep_minutes: 5
+# Panel sleep is controlled by display_idle_sleep_seconds (under Display).
+# The tiers below govern the CPU governor and system suspend after longer idle.
 sleep_tiers:
-  display_off_minutes: 5
+  display_off_minutes: 5            # Fallback panel-off trigger when display_idle_sleep_seconds is 0
   cpu_powersave_minutes: 15
   system_suspend_minutes: 30
 enable_battery_monitor: true
@@ -271,8 +274,9 @@ battery_warning_percent: 15
 battery_shutdown_percent: 3
 pisugar_socket: /tmp/pisugar-server.sock
 
-# Logging
+# Logging & metrics
 log_dir: ~/.config/writer-deck/logs
+enable_perf_metrics: false          # Log p50/p95/max render timings every 30s
 ```
 
 ### Example config.yaml

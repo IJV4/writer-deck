@@ -38,6 +38,12 @@ class Document:
         self.dirty: bool = False
         self.selection: Selection | None = None
 
+        # Extension (including the leading dot) this document was loaded from,
+        # so FileManager can save/autosave back to the same suffix rather than
+        # forking a .md into a new .txt. Defaults to ".txt" (the native format);
+        # FileManager.load() overrides it from the resolved on-disk path.
+        self.loaded_suffix: str = ".txt"
+
         # Undo/redo
         self._undo_stack: deque[_Snapshot] = deque(maxlen=100)
         self._redo_stack: deque[_Snapshot] = deque(maxlen=100)
@@ -85,6 +91,11 @@ class Document:
     def _push_undo(self, action: str = "") -> None:
         """Push current state onto undo stack. Coalesces if <1s and same action."""
         now = time.monotonic()
+        # Every call to _push_undo represents a new edit, so any pending redo
+        # snapshots are now stale and must be discarded — including on the
+        # coalesce path below. Clearing before the early-return prevents a
+        # later redo() from resurrecting text that this edit superseded.
+        self._redo_stack.clear()
         if (
             action
             and action == self._last_undo_action
@@ -98,7 +109,6 @@ class Document:
             cursor_col=self.cursor_col,
         )
         self._undo_stack.append(snap)
-        self._redo_stack.clear()
         self._last_undo_time = now
         self._last_undo_action = action
 

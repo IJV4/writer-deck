@@ -44,6 +44,10 @@ class BaseMode(ABC):
         # Number of wrapped rows produced by the last render(); used to clamp
         # PAGE_DOWN so scrolling can't run off the end into a blank screen.
         self._wrapped_len: int = 0
+        # Visible wrapped rows per page from the last render() of a paged mode;
+        # lets PAGE_UP/PAGE_DOWN compute the last page and detect no-op moves.
+        # 0 until the first render() (fall back to a single page).
+        self._visible_lines: int = 0
 
     def on_enter(self) -> None:
         self._scroll_offset = 0
@@ -162,6 +166,50 @@ class BaseMode(ABC):
         return result
 
     # -- Standard key dispatch ---------------------------------------------
+
+    def _last_page(self) -> int:
+        """Index of the final page given the last render()'s wrapped length.
+
+        Uses _visible_lines captured on the previous render(); returns 0 before
+        any render() has run (single page) so PAGE_DOWN can't advance blindly.
+        """
+        if self._visible_lines <= 0:
+            return 0
+        total = max(1, math.ceil(self._wrapped_len / self._visible_lines))
+        return total - 1
+
+    def _handle_paged_input(
+        self, action: KeyAction, char: str, doc: Document
+    ) -> bool:
+        """Shared handle_input for page-based modes (distraction-free, dashboard).
+
+        Ctrl+Up/Down (PAGE_PREV/PAGE_NEXT) and the physical PageUp/PageDown keys
+        flip the manual page and hold the viewport; any other key clears manual
+        paging, then falls through to visual-row Up/Down and the common editing
+        dispatch.
+
+        PageUp/PageDown are aliased to page-previous/page-next here (rather than
+        the continuous _scroll_offset scrolling that only TypewriterMode uses),
+        and return True only when the viewport actually moves so an already
+        first/last page doesn't force a wasted e-ink refresh.
+        """
+        if action in (KeyAction.PAGE_PREV, KeyAction.PAGE_UP):
+            new_page = max(0, self._current_page - 1)
+            changed = new_page != self._current_page
+            self._current_page = new_page
+            self._page_manual = True
+            return changed
+        if action in (KeyAction.PAGE_NEXT, KeyAction.PAGE_DOWN):
+            new_page = min(self._current_page + 1, self._last_page())
+            changed = new_page != self._current_page
+            self._current_page = new_page
+            self._page_manual = True
+            return changed
+        self._page_manual = False
+        result = self._handle_visual_updown(action, char, doc)
+        if result is not None:
+            return result
+        return self._apply_common_input(action, char, doc)
 
     def _apply_common_input(
         self, action: KeyAction, char: str, doc: Document

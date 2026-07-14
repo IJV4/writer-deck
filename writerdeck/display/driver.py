@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Protocol
 
@@ -132,6 +133,12 @@ class EPaperDriver:
         # every keystroke (PERF-3). None after sleep-clear.
         self._last_buf: bytearray | None = None
         self._slept = False  # guards sleep()/close() against double-invocation
+        # EPD SPI is not thread-safe: the Power thread's emergency path can call
+        # sleep() while the main loop is mid display_partial/display_full. This
+        # reentrant lock serializes every hardware op (and the retry/re-init that
+        # public methods run while already holding it — hence RLock, not Lock).
+        # It also protects the shared _last_buf / _mode / _slept state.
+        self._lock = threading.RLock()
 
     def _reinit_current_waveform(self) -> None:
         """Re-run the init sequence for the CURRENT waveform (FAULT-6 retry).
@@ -160,25 +167,26 @@ class EPaperDriver:
         (app render path, FAULT-7) can skip the frame / go headless.
         """
         last_exc: Exception | None = None
-        for attempt in range(DISPLAY_OP_ATTEMPTS):
-            try:
-                op()
-                return
-            except DisplayError:
-                raise
-            except Exception as exc:  # noqa: BLE001 — any SPI/CRC/busy fault
-                last_exc = exc
-                logger.warning(
-                    "Display op %r failed (attempt %d/%d): %s",
-                    op_name, attempt + 1, DISPLAY_OP_ATTEMPTS, exc,
-                )
-                if attempt + 1 < DISPLAY_OP_ATTEMPTS:
-                    try:
-                        self._reinit_current_waveform()
-                    except Exception as reinit_exc:  # noqa: BLE001
-                        logger.warning(
-                            "Re-init before retry failed: %s", reinit_exc
-                        )
+        with self._lock:
+            for attempt in range(DISPLAY_OP_ATTEMPTS):
+                try:
+                    op()
+                    return
+                except DisplayError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 — any SPI/CRC/busy fault
+                    last_exc = exc
+                    logger.warning(
+                        "Display op %r failed (attempt %d/%d): %s",
+                        op_name, attempt + 1, DISPLAY_OP_ATTEMPTS, exc,
+                    )
+                    if attempt + 1 < DISPLAY_OP_ATTEMPTS:
+                        try:
+                            self._reinit_current_waveform()
+                        except Exception as reinit_exc:  # noqa: BLE001
+                            logger.warning(
+                                "Re-init before retry failed: %s", reinit_exc
+                            )
         raise DisplayError(
             f"Display op {op_name!r} failed after {DISPLAY_OP_ATTEMPTS} attempts"
         ) from last_exc
@@ -202,18 +210,44 @@ class EPaperDriver:
             from waveshare_epd import epdconfig  # type: ignore[import-untyped]
         except Exception:
             return
+        # The panel latches its busy state only in response to a get-status
+        # command (0x71) — the vendored ReadBusy always sends it before every
+        # sample. Reading the pin cold (without 0x71) can return a stale value.
+        # Best-effort: no-op on mocks / driver variants that lack send_command,
+        # so the desktop/test paths are unaffected.
+        send_command = getattr(self._epd, "send_command", None)
+        if callable(send_command):
+            try:
+                send_command(0x71)
+            except Exception:  # noqa: BLE001 — never let the status probe raise
+                pass
         # 0 == busy in the vendored driver; a lingering 0 means ReadBusy timed out.
         if epdconfig.digital_read(busy_pin) == 0:
             raise RuntimeError("panel still BUSY after op (ReadBusy timeout)")
 
     def init(self) -> None:
         from waveshare_epd import epd7in5_V2  # type: ignore[import-untyped]
-        self._epd = epd7in5_V2.EPD()
-        self._epd.init_fast()
-        self._mode = "fast"
-        self._last_buf = None
-        self._slept = False
-        logger.info("EPaperDriver initialized (%dx%d)", WIDTH, HEIGHT)
+        with self._lock:
+            # Recovery re-init: if a previous controller exists (e.g. a failed
+            # panel being re-initialised), tear it down first so we don't leak
+            # the old GPIO/SPI handle by constructing a fresh EPD on top of it.
+            # Best-effort — must not raise if the old controller is already dead.
+            if self._epd is not None:
+                try:
+                    self._epd.sleep()
+                except Exception:  # noqa: BLE001 — old controller may be dead
+                    pass
+                try:
+                    from waveshare_epd import epdconfig  # type: ignore[import-untyped]
+                    epdconfig.module_exit()
+                except Exception:  # noqa: BLE001 — best-effort teardown
+                    pass
+            self._epd = epd7in5_V2.EPD()
+            self._epd.init_fast()
+            self._mode = "fast"
+            self._last_buf = None
+            self._slept = False
+            logger.info("EPaperDriver initialized (%dx%d)", WIDTH, HEIGHT)
 
     def display_full(self, image: Image.Image) -> None:
         """Fast full refresh (~1s, 2-3 blink cycles). Use for streak/idle cleans.
@@ -336,28 +370,31 @@ class EPaperDriver:
         controller RAM (DTM1/DTM2) is reset by the hardware init sequence.
         """
         assert self._epd is not None
-        self._epd.init_fast()
-        self._mode = "fast"
-        self._slept = False  # panel is powered again
-        # _last_buf is intentionally preserved: the physical screen still shows
-        # what it was showing before sleep, so the diff reference remains valid.
-        logger.info("EPaperDriver woken from sleep (no clear)")
+        with self._lock:
+            self._epd.init_fast()
+            self._mode = "fast"
+            self._slept = False  # panel is powered again
+            # _last_buf is intentionally preserved: the physical screen still shows
+            # what it was showing before sleep, so the diff reference remains valid.
+            logger.info("EPaperDriver woken from sleep (no clear)")
 
     def sleep(self) -> None:
         # Idempotent: safe to call from both a signal handler and atexit.
-        if self._epd is not None and not self._slept:
-            self._epd.sleep()
-            self._mode = None  # hardware power cut — must re-init before next display
-            self._slept = True
-            # _last_buf preserved: e-ink retains its image without power
-            logger.info("EPaperDriver sleeping")
+        with self._lock:
+            if self._epd is not None and not self._slept:
+                self._epd.sleep()
+                self._mode = None  # hardware power cut — must re-init before next display
+                self._slept = True
+                # _last_buf preserved: e-ink retains its image without power
+                logger.info("EPaperDriver sleeping")
 
     def close(self) -> None:
         # Idempotent: skip the Clear() if already slept so double-invocation
         # (signal handler + atexit) is safe and never raises.
-        if self._epd is not None and not self._slept:
-            self._epd.Clear()
-        self.sleep()
+        with self._lock:
+            if self._epd is not None and not self._slept:
+                self._epd.Clear()
+            self.sleep()
 
 
 class NullDriver:
@@ -409,7 +446,18 @@ def create_driver(use_null: bool = False) -> DisplayDriver:
         drv.init()
         return drv
     except Exception:
-        logger.warning("EPaperDriver unavailable, falling back to NullDriver")
+        # Hardware init FAILED — the panel is dead/misconfigured. Fall back to a
+        # NullDriver so input/autosave keep running, but log LOUDLY at ERROR: the
+        # device is now running headless-from-boot with frames going to /tmp
+        # instead of the e-ink panel. Without this the Pi looks healthy while the
+        # user sees a blank screen. No on-panel signal is possible here (the panel
+        # itself is what failed), so a loud log is the only signal we can give.
+        logger.error(
+            "EPaperDriver hardware init FAILED — running HEADLESS-FROM-BOOT; "
+            "the e-ink panel will NOT update, frames are being written to /tmp. "
+            "Check the panel wiring / SPI config.",
+            exc_info=True,
+        )
         drv_null = NullDriver()
         drv_null.init()
         return drv_null

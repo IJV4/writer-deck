@@ -1,9 +1,14 @@
 # Writer Deck — Next Steps
 
+> **2026-07-13 audit fixes:** a batch of confirmed bug fixes landed — see
+> [`AUDIT-FIXES-2026-07-13.md`](AUDIT-FIXES-2026-07-13.md). Some are verified by tests; several
+> are **pending verification** and need deps installed and/or real hardware. Its "Testing notes"
+> section lists exactly what to run before considering them done.
+
 ## Status
 
 Hardware is fully operational on Pi Zero 2 W:
-- E-ink display working with bounding-box partial refresh, 4-gray grayscale, and optimized waveform selection
+- E-ink display working with bounding-box partial refresh across three 1-bit waveform modes (partial / fast-full / GC16 deep clean) and optimized waveform selection
 - USB keyboard reading via evdev
 - Systemd service autostarts on boot
 - Display sleep/wake without white flash
@@ -37,7 +42,7 @@ The device uses a 60% keyboard (no function row, no dedicated navigation keys). 
 
 ### File Management Improvements
 
-- **Document naming** — the `untitled-N.txt` scheme is functional but not descriptive; consider prompting for a name on first save, or auto-titling from the first line of content
+- **Document naming** — new documents are auto-named from a timestamp (`YYYY-MM-DD_HH-MM`), which is unambiguous but not descriptive; consider prompting for a name on first save, or auto-titling from the first line of content
 - **File picker** — currently lists files by modification time; consider showing file size or word count in the picker
 - **Export/backup** — USB export works; consider adding a timestamp or organizing exports into dated folders
 
@@ -66,7 +71,7 @@ mounted separately (e.g. in the clamshell lid) and wired back with 9 individual 
 ### Battery Life Testing
 
 - Time a full writing session on PiSugar 3 Plus (expect 4-5 hours)
-- Tweak `display_sleep_minutes` for optimal balance
+- Tweak `display_idle_sleep_seconds` (and the `sleep_tiers`) for optimal balance
 
 ---
 

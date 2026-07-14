@@ -8,6 +8,13 @@
 > independent fixes, and what remains hardware-verify-pending. The sections below document the
 > earlier display-refresh overhaul and dev tooling.
 
+> **2026-07-13 hardening round (6 bug fixes + 6 tech-debt items): see
+> [`FIXES-2026-07-13.md`](FIXES-2026-07-13.md).** Fixes a `.md` data-loss bug, a `deploy.sh` prune
+> bug, rename/`.last_open`, font-cache invalidation, a `get_font` crash path, two dead config knobs,
+> plus tech debt (markdown lone-`*`, mode-input dedup, `stdin` keys, `subprocess` migration, etc.).
+> Items whose tests need a real venv (Pillow/PyYAML) are flagged **`ENV-PENDING`** there and must be
+> run before that work is considered closed.
+
 ---
 
 ## Display Refresh Overhaul — DONE
