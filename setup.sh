@@ -40,8 +40,10 @@ sudo apt-get update -qq
 sudo apt-get install -y -qq \
     python3-dev python3-venv python3-pip \
     libfreetype6-dev libjpeg-dev libopenjp2-7-dev \
-    libgpiod-dev fonts-hack-ttf git evtest \
-    avahi-daemon libnss-mdns
+    libgpiod-dev git evtest \
+    avahi-daemon libnss-mdns \
+    fonts-hack-ttf fonts-liberation fonts-courier-prime fonts-ebgaramond \
+    fonts-lato fonts-dejavu-core
 
 # 2. Set hostname for mDNS discovery
 echo "[2/11] Configuring hostname (writer-deck.local)..."
