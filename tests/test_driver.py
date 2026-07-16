@@ -226,12 +226,14 @@ class TestEPaperDriverBoundingBoxPartial:
 
     def test_close_is_idempotent(self):
         # close() runs from both the signal handler and atexit — calling it
-        # twice must be safe and must not Clear()/sleep() the panel twice.
+        # twice must be safe. Each call still wipes to white (a shutdown may be
+        # the last chance to do so before the panel sits unpowered for a
+        # while), so Clear()/sleep() fire again each time rather than no-op.
         drv, mock_epd = _make_epd_driver(mode="full")
         drv.close()
         drv.close()
-        mock_epd.Clear.assert_called_once()
-        mock_epd.sleep.assert_called_once()
+        assert mock_epd.Clear.call_count == 2
+        assert mock_epd.sleep.call_count == 2
 
     def test_sleep_is_idempotent(self):
         drv, mock_epd = _make_epd_driver(mode="full")
@@ -239,13 +241,19 @@ class TestEPaperDriverBoundingBoxPartial:
         drv.sleep()
         mock_epd.sleep.assert_called_once()
 
-    def test_close_after_sleep_does_not_clear(self):
-        # If already slept, close() must not attempt Clear() again.
+    def test_close_after_sleep_still_clears(self):
+        # An already-slept panel must still be wiped to white on close() — it
+        # must not silently skip Clear() just because Tier-1 idle-sleep already
+        # put it to sleep before shutdown (this was the actual bug: a panel
+        # asleep at shutdown time never got wiped, risking ghosting/retention
+        # over however long it then sits unpowered). Deep-sleep leaves
+        # controller RAM unusable, so close() must re-init before Clear().
         drv, mock_epd = _make_epd_driver(mode="full")
         drv.sleep()
         drv.close()
-        mock_epd.Clear.assert_not_called()
-        mock_epd.sleep.assert_called_once()
+        mock_epd.init_fast.assert_called_once()
+        mock_epd.Clear.assert_called_once()
+        assert mock_epd.sleep.call_count == 2
 
     def test_wake_resets_slept_flag(self):
         # After sleep + wake, the panel is powered again and can sleep once more.

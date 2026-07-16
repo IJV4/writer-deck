@@ -23,7 +23,7 @@ def _base_frame() -> RenderFrame:
 
 class TestFontPickerRender:
     def test_renders_font_list(self):
-        overlay = FontPickerOverlay(["Hack", "DejaVu", "Courier"])
+        overlay = FontPickerOverlay([("Hack", "Hack"), ("DejaVu", "DejaVu"), ("Courier", "Courier")])
         frame = overlay.render(_base_frame())
         # Should contain font names
         text = "\n".join(frame.text_lines)
@@ -32,28 +32,34 @@ class TestFontPickerRender:
         assert "Courier" in text
 
     def test_selected_item_has_prefix(self):
-        overlay = FontPickerOverlay(["Hack", "DejaVu"])
+        # The ">" marker is drawn via line_prefixes (kept out of text_lines
+        # so a per-row font override can't shift its alignment).
+        overlay = FontPickerOverlay([("Hack", "Hack"), ("DejaVu", "DejaVu")])
         frame = overlay.render(_base_frame())
-        # First item should have ">" prefix
-        found = any("> Hack" in line for line in frame.text_lines)
-        assert found
+        hack_idx = frame.text_lines.index("Hack")
+        assert frame.line_prefixes is not None
+        assert frame.line_prefixes[hack_idx] == "> "
 
     def test_navigation_moves_prefix(self):
-        overlay = FontPickerOverlay(["Hack", "DejaVu"])
+        overlay = FontPickerOverlay([("Hack", "Hack"), ("DejaVu", "DejaVu")])
         overlay.handle_input(KeyAction.ARROW_DOWN, "")
         frame = overlay.render(_base_frame())
-        found = any("> DejaVu" in line for line in frame.text_lines)
-        assert found
+        dejavu_idx = frame.text_lines.index("DejaVu")
+        assert frame.line_prefixes is not None
+        assert frame.line_prefixes[dejavu_idx] == "> "
 
     def test_cursor_hidden(self):
-        overlay = FontPickerOverlay(["Hack"])
+        overlay = FontPickerOverlay([("Hack", "Hack")])
         frame = overlay.render(_base_frame())
         assert frame.show_cursor is False
 
-    def test_force_full_refresh(self):
-        overlay = FontPickerOverlay(["Hack"])
+    def test_navigation_does_not_force_full_refresh(self):
+        # app.py's open/close action handlers already force a full refresh
+        # for the "page flip"; in-list navigation frames must not also force
+        # one, or every arrow keypress blinks the whole panel.
+        overlay = FontPickerOverlay([("Hack", "Hack")])
         frame = overlay.render(_base_frame())
-        assert frame.force_full_refresh is True
+        assert frame.force_full_refresh is False
 
     def test_empty_fonts_shows_placeholder(self):
         overlay = FontPickerOverlay([])
@@ -62,7 +68,7 @@ class TestFontPickerRender:
         assert "no fonts" in text.lower()
 
     def test_boundary_navigation(self):
-        overlay = FontPickerOverlay(["A", "B", "C"])
+        overlay = FontPickerOverlay([("A", "A"), ("B", "B"), ("C", "C")])
         # Navigate past start
         overlay.handle_input(KeyAction.ARROW_UP, "")
         assert overlay._selected == 0
@@ -71,6 +77,21 @@ class TestFontPickerRender:
         overlay.handle_input(KeyAction.ARROW_DOWN, "")
         overlay.handle_input(KeyAction.ARROW_DOWN, "")  # past end
         assert overlay._selected == 2
+
+    def test_each_font_line_rendered_in_its_own_typeface(self):
+        # Each entry's row is drawn using that font's own family, not the
+        # frame's default, so its shape is visible directly in the list.
+        overlay = FontPickerOverlay([("Hack", "Hack — Monospace"), ("DejaVuSerif", "DejaVuSerif — Serif")])
+        frame = overlay.render(_base_frame())
+        assert frame.line_fonts is not None
+        assert len(frame.line_fonts) == len(frame.text_lines)
+        font_line_idx = next(
+            i for i, line in enumerate(frame.text_lines) if "DejaVuSerif" in line
+        )
+        assert frame.line_fonts[font_line_idx] == "DejaVuSerif"
+        # Header/footer lines have no font override.
+        assert frame.line_fonts[0] is None
+        assert frame.line_fonts[-1] is None
 
 
 def _make_file_picker(docs: list[str]) -> FilePickerOverlay:

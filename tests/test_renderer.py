@@ -289,3 +289,64 @@ class TestHeadingRendering:
         )
         img = render(frame, "Hack", 14)
         assert img.size == (WIDTH, HEIGHT)
+
+
+class TestLineFonts:
+    """line_fonts lets an overlay (e.g. the font picker) render each row in
+    its own typeface rather than the frame's default font_family."""
+
+    def test_line_font_override_used(self, monkeypatch):
+        requested_families: list[str] = []
+        real_get_font = __import__(
+            "writerdeck.display.fonts", fromlist=["get_font"]
+        ).get_font
+
+        def spy_get_font(family, size, *a, **kw):
+            requested_families.append(family)
+            return real_get_font(family, size, *a, **kw)
+
+        monkeypatch.setattr("writerdeck.display.renderer.get_font", spy_get_font)
+        frame = RenderFrame(
+            text_lines=["default line", "override line"],
+            line_fonts=[None, "DejaVuSerif"],
+        )
+        render(frame, "Hack", 14)
+        assert "DejaVuSerif" in requested_families
+
+    def test_no_line_fonts_defaults_to_frame_family(self):
+        # Backward compatibility: omitting line_fonts must still render.
+        frame = RenderFrame(text_lines=["plain line"])
+        img = render(frame, "Hack", 14)
+        assert img.size == (WIDTH, HEIGHT)
+
+    def test_prefix_alignment_independent_of_row_font(self, monkeypatch):
+        # The font picker's bug: without a fixed-font prefix, two rows in
+        # different typefaces with the same "> " marker land their label
+        # text at different x positions, because "> " has a different
+        # advance width in each font. line_prefixes must keep both rows'
+        # label text starting at the same x.
+        import writerdeck.display.renderer as renderer_mod
+
+        real_draw_text_cached = renderer_mod.draw_text_cached
+        calls: list[tuple[str, int]] = []
+
+        def spy_draw_text_cached(draw, pos, text, font, **kw):
+            calls.append((text, pos[0]))
+            return real_draw_text_cached(draw, pos, text, font, **kw)
+
+        monkeypatch.setattr(renderer_mod, "draw_text_cached", spy_draw_text_cached)
+
+        frame_a = RenderFrame(
+            text_lines=["Sample"], line_fonts=["DejaVuSerif"], line_prefixes=["> "],
+        )
+        render(frame_a, "Hack", 14)
+        x_a = next(x for text, x in calls if text == "Sample")
+
+        calls.clear()
+        frame_b = RenderFrame(
+            text_lines=["Sample"], line_fonts=["DejaVuSansMono"], line_prefixes=["> "],
+        )
+        render(frame_b, "Hack", 14)
+        x_b = next(x for text, x in calls if text == "Sample")
+
+        assert x_a == x_b

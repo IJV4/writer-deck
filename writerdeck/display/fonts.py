@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -26,6 +27,9 @@ _SYSTEM_FONT_DIRS = [
 ]
 
 
+_FONT_GLOBS = ("*.ttf", "*.otf")
+
+
 def _find_font_file(family: str, bold: bool = False, italic: bool = False) -> str | None:
     slug = family.lower().replace(" ", "")
     # Build suffix variants to search for
@@ -40,17 +44,18 @@ def _find_font_file(family: str, bold: bool = False, italic: bool = False) -> st
     for d in _SYSTEM_FONT_DIRS:
         if not d.exists():
             continue
-        for p in d.rglob("*.ttf"):
-            stem = p.stem.lower().replace("-", "").replace(" ", "")
-            if slug not in stem:
-                continue
-            if suffixes:
-                if any(s in stem for s in suffixes):
-                    return str(p)
-            else:
-                # Prefer regular/non-bold/non-italic
-                if not any(s in stem for s in ("bold", "italic", "oblique")):
-                    return str(p)
+        for pattern in _FONT_GLOBS:
+            for p in d.rglob(pattern):
+                stem = p.stem.lower().replace("-", "").replace(" ", "")
+                if slug not in stem:
+                    continue
+                if suffixes:
+                    if any(s in stem for s in suffixes):
+                        return str(p)
+                else:
+                    # Prefer regular/non-bold/non-italic
+                    if not any(s in stem for s in ("bold", "italic", "oblique")):
+                        return str(p)
 
     # Fallback: if looking for variant, try without suffix restriction
     if suffixes:
@@ -60,9 +65,10 @@ def _find_font_file(family: str, bold: bool = False, italic: bool = False) -> st
     for d in _SYSTEM_FONT_DIRS:
         if not d.exists():
             continue
-        for p in d.rglob("*.ttf"):
-            if slug in p.stem.lower().replace("-", "").replace(" ", ""):
-                return str(p)
+        for pattern in _FONT_GLOBS:
+            for p in d.rglob(pattern):
+                if slug in p.stem.lower().replace("-", "").replace(" ", ""):
+                    return str(p)
     return None
 
 
@@ -101,18 +107,89 @@ def get_font(
         return ImageFont.load_default_imagefont()
 
 
+# Style/weight tokens to strip off a filename stem so e.g. Lato-Black,
+# Lato-HairlineItalic, and "Courier Prime Bold Italic" all collapse to their
+# base family ("Lato" alone ships 18 variant files across weight × italic).
+_STYLE_WORDS = {
+    "regular", "bold", "italic", "oblique", "bolditalic", "boldoblique",
+    "black", "blackitalic", "heavy", "heavyitalic",
+    "semibold", "semibolditalic", "medium", "mediumitalic",
+    "light", "lightitalic", "hairline", "hairlineitalic", "thin", "thinitalic",
+}
+
+# Name fragments identifying icon/symbol fonts — not usable as body text and
+# must never be offered in the font picker (e.g. fontawesome-webfont.ttf).
+_ICON_FONT_MARKERS = ("awesome", "icon", "symbol", "webfont", "glyphicons", "material")
+
+# Extra subfamilies that would otherwise clutter the picker with near-duplicate
+# entries of an already-included family: condensed "Narrow" cuts, and Courier
+# Prime's "Sans"/"Code" companion faces (whose names are supersets of the base
+# "Courier Prime" slug and would make _find_font_file's substring match
+# ambiguous about which file "Courier Prime" itself resolves to).
+_SUBFAMILY_EXCLUDE_MARKERS = ("narrow", "courierprimesans", "courierprimecode")
+
+# Cosmetic renames for stems that don't already read as a clean family name
+# (EB Garamond ships as "EBGaramond08"/"EBGaramond12" for two optical sizes).
+_DISPLAY_NAME_ALIASES = {"EBGaramond": "EB Garamond"}
+
+
+def _strip_style_tokens(stem: str) -> str:
+    tokens = re.split(r"[-\s]+", stem)
+    while len(tokens) > 1 and tokens[-1].lower() in _STYLE_WORDS:
+        tokens.pop()
+    return " ".join(tokens)
+
+
 def list_available_fonts() -> list[str]:
-    """Return a sorted list of unique font family names found on the system."""
+    """Return a sorted list of unique, human-selectable font family names."""
     seen: set[str] = set()
     for d in _SYSTEM_FONT_DIRS:
         if not d.exists():
             continue
-        for p in d.rglob("*.ttf"):
-            # Use the stem, strip common suffixes
-            name = p.stem
-            for suffix in ("-Regular", "-Bold", "-Italic", "-BoldItalic", "-Light", "-Medium"):
-                if name.endswith(suffix):
-                    name = name[: -len(suffix)]
-                    break
-            seen.add(name)
+        for pattern in _FONT_GLOBS:
+            for p in d.rglob(pattern):
+                stem_lower = p.stem.lower()
+                if any(marker in stem_lower for marker in _ICON_FONT_MARKERS):
+                    continue
+                stem_compact = stem_lower.replace(" ", "").replace("-", "")
+                if any(marker in stem_compact for marker in _SUBFAMILY_EXCLUDE_MARKERS):
+                    continue
+                name = _strip_style_tokens(p.stem)
+                name = re.sub(r"\d+$", "", name)  # drop trailing optical-size digits
+                name = _DISPLAY_NAME_ALIASES.get(name, name)
+                if name:
+                    seen.add(name)
     return sorted(seen)
+
+
+# Name fragments that reliably indicate a serif design — used only as a
+# tiebreaker once the (more reliable) monospace metric check below says no.
+_SERIF_MARKERS = ("serif", "garamond", "times", "georgia", "caladea")
+
+
+def _is_monospace(family: str) -> bool:
+    """Detect fixed-width fonts by comparing glyph advance widths directly —
+    more reliable than guessing from the family name."""
+    try:
+        font = get_font(family, 24)
+        narrow = font.getlength("iiiii")
+        wide = font.getlength("MMMMM")
+    except Exception:
+        return False
+    return wide > 0 and abs(narrow - wide) < 0.5
+
+
+def font_style_label(family: str) -> str:
+    """Best-effort typology (Serif / Sans / Monospace) for the font picker,
+    so the family name alone hints at how the font will look."""
+    if _is_monospace(family):
+        return "Monospace"
+    if any(marker in family.lower() for marker in _SERIF_MARKERS):
+        return "Serif"
+    return "Sans"
+
+
+def list_available_fonts_labeled() -> list[tuple[str, str]]:
+    """(family, display_label) pairs for the font picker UI. ``family`` is the
+    value stored in config/state; ``display_label`` adds a typology hint."""
+    return [(f, f"{f} — {font_style_label(f)}") for f in list_available_fonts()]

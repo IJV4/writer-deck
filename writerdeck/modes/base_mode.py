@@ -31,6 +31,16 @@ class RenderFrame:
     status_message: str | None = None
     selection: tuple[int, int, int, int] | None = None  # (sl, sc, el, ec) in wrapped coords
     line_kinds: list[str] | None = None  # parallel to text_lines: "body"/"h1"/"h2" per row
+    # Parallel to text_lines: per-row font family override (None = use the
+    # frame's default font_family). Lets an overlay render each row in its
+    # own typeface — e.g. the font picker showing each entry in that font.
+    line_fonts: list[str | None] | None = None
+    # Parallel to text_lines: an optional prefix drawn in the frame's
+    # default font *before* the row's (possibly overridden) font, at a fixed
+    # x-offset. Without this, a per-row font override shifts where the row's
+    # own text starts, since "> "/"  " has a different advance width in each
+    # typeface — the font picker uses this to keep entries left-aligned.
+    line_prefixes: list[str] | None = None
 
 
 class BaseMode(ABC):

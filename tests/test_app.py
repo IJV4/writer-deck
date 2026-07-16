@@ -73,12 +73,14 @@ class TestAppInit:
             partial_refresh_max_streak=50, render_interval_ms=100, font_size=16,
         )
         driver = MagicMock()
-        driver.sleep.side_effect = RuntimeError("driver broken")
+        # emergency_save() calls driver.close() (not bare sleep()) so a
+        # critical-battery shutdown also wipes the panel to white.
+        driver.close.side_effect = RuntimeError("driver broken")
         mock_driver.return_value = driver
 
         from writerdeck.core.app import App
         app = App()
-        # Should not raise even if driver.sleep() raises
+        # Should not raise even if driver.close() raises
         app.emergency_save()
 
 
@@ -1006,6 +1008,11 @@ class TestLowBatteryWarning:
 
     def _low_batt_app(self, tmp_path):
         app = _make_app_with(tmp_path, {"enable_battery_monitor": True})
+        # The startup low-battery gate calls check_now() synchronously in
+        # run(), which would otherwise clobber the state these tests set
+        # manually (no real PiSugar socket in tests, so a real check_now()
+        # would reset is_low/available back to their query-failed defaults).
+        app._power.check_now = MagicMock()  # type: ignore[method-assign]
         app._power._available = True
         return app
 
@@ -1085,36 +1092,14 @@ class TestDeepCleanOnWake:
 
 
 class TestScreensaverKnob:
-    """LOW: screensaver fires at its configured time, warns if it can never fire."""
-
-    def test_screensaver_disabled_warning_when_ge_sleep(self, tmp_path, caplog):
-        import logging as _logging
-        app = _make_app_with(
-            tmp_path,
-            {
-                "display_idle_sleep_seconds": 20,
-                "display_screensaver_seconds": 20,  # == sleep → can't fire first
-                "sleep_tiers": {
-                    "display_off_minutes": 5,
-                    "cpu_powersave_minutes": 0,
-                    "system_suspend_minutes": 0,
-                },
-            },
-        )
-        app._last_keypress = time.monotonic() - 25
-        with caplog.at_level(_logging.WARNING):
-            _run_loop(app, ticks=1)
-        assert app._screensaver_disabled_warned is True
-        # Screensaver never fired because it's disabled by the earlier sleep.
-        assert app._screensaver_shown is False
-        assert any("screensaver disabled" in r.message for r in caplog.records)
+    """LOW: screensaver fires at its configured idle time, independent of Tier-1."""
 
     def test_screensaver_fires_at_configured_time(self, tmp_path):
         app = _make_app_with(
             tmp_path,
             {
                 "display_idle_sleep_seconds": 60,
-                "display_screensaver_seconds": 20,  # < sleep → fires
+                "display_screensaver_seconds": 20,  # < sleep → fires while awake
                 "sleep_tiers": {
                     "display_off_minutes": 5,
                     "cpu_powersave_minutes": 0,
@@ -1128,6 +1113,39 @@ class TestScreensaverKnob:
         assert app._screensaver_shown is True
         # Panel not yet asleep (sleep is at 60s).
         assert app._display_sleeping is False
+
+    def test_screensaver_fires_after_panel_already_asleep(self, tmp_path):
+        """The default/common case: screensaver_secs > the Tier-1 sleep trigger,
+        so by the time it fires the panel has already been asleep for a while.
+        It must still paint (waking briefly), then put the panel straight back
+        to sleep rather than leaving it powered on indefinitely.
+        """
+        app = _make_app_with(
+            tmp_path,
+            {
+                "display_idle_sleep_seconds": 20,
+                "display_screensaver_seconds": 300,  # >> sleep → fires while asleep
+                "sleep_tiers": {
+                    "display_off_minutes": 5,
+                    "cpu_powersave_minutes": 0,
+                    "system_suspend_minutes": 0,
+                },
+            },
+        )
+        app._display_sleeping = True
+        sleep_started = time.monotonic() - 310
+        app._sleep_started_at = sleep_started
+        app._last_keypress = time.monotonic() - 310
+        _run_loop(app, ticks=1)
+        assert app._screensaver_shown is True
+        app._driver.wake.assert_called()
+        app._driver.display_full.assert_called()
+        # Put right back to sleep — screensaver must not leave the panel powered.
+        app._driver.sleep.assert_called()
+        assert app._display_sleeping is True
+        # _sleep_started_at is untouched by the screensaver's wake/sleep blip, so
+        # the post-wake deep-clean timer still measures from the original sleep.
+        assert app._sleep_started_at == sleep_started
 
 
 class TestSuspendRearm:
@@ -1144,6 +1162,92 @@ class TestSuspendRearm:
         assert app._tier3_active is False
         assert app._tier2_active is False
         assert app._last_keypress >= before
+
+
+class TestStartupLowBatteryGate:
+    """Refuse to start the writing UI on a critically low, unplugged battery —
+    shows a charge prompt and powers off instead of entering the main loop."""
+
+    def _make_gated_app(self, tmp_path, overrides=None):
+        base = {"enable_battery_monitor": True, "battery_shutdown_percent": 10}
+        if overrides:
+            base.update(overrides)
+        app = _make_app_with(tmp_path, base)
+        app._power.check_now = MagicMock()  # no real socket call in tests
+        app._startup_low_battery_shutdown = MagicMock()  # type: ignore[method-assign]
+        return app
+
+    def test_blocks_when_low_and_not_charging(self, tmp_path):
+        app = self._make_gated_app(tmp_path)
+        app._power._available = True
+        app._power.is_charging = False
+        app._power.battery_level = 5
+        app._keyboard.start = MagicMock()  # type: ignore[method-assign]
+        app.run()
+        app._startup_low_battery_shutdown.assert_called_once_with(5)
+        # The gate short-circuits before any subsystem starts.
+        app._keyboard.start.assert_not_called()
+
+    def test_allows_boot_when_charging(self, tmp_path):
+        app = self._make_gated_app(tmp_path)
+        app._power._available = True
+        app._power.is_charging = True
+        app._power.battery_level = 5
+        _run_loop(app, ticks=1)
+        app._startup_low_battery_shutdown.assert_not_called()
+
+    def test_allows_boot_when_reading_unavailable(self, tmp_path):
+        app = self._make_gated_app(tmp_path)
+        app._power._available = False
+        app._power.battery_level = 5
+        _run_loop(app, ticks=1)
+        app._startup_low_battery_shutdown.assert_not_called()
+
+    def test_allows_boot_when_above_threshold(self, tmp_path):
+        app = self._make_gated_app(tmp_path)
+        app._power._available = True
+        app._power.is_charging = False
+        app._power.battery_level = 50
+        _run_loop(app, ticks=1)
+        app._startup_low_battery_shutdown.assert_not_called()
+
+    def test_disabled_when_battery_monitor_off(self, tmp_path):
+        app = self._make_gated_app(tmp_path, {"enable_battery_monitor": False})
+        app._power._available = True
+        app._power.is_charging = False
+        app._power.battery_level = 1
+        _run_loop(app, ticks=1)
+        app._power.check_now.assert_not_called()
+        app._startup_low_battery_shutdown.assert_not_called()
+
+
+class TestStartupLowBatteryShutdownSequence:
+    """_startup_low_battery_shutdown() itself: message, wipe, poweroff order."""
+
+    @patch("writerdeck.core.app.time.sleep")
+    @patch("writerdeck.core.app.subprocess.run")
+    def test_shows_message_wipes_then_powers_off(self, mock_run, mock_sleep, tmp_path):
+        mock_run.return_value.returncode = 0
+        app = _make_app_with(tmp_path)
+        app._startup_low_battery_shutdown(5)
+        app._driver.display_full.assert_called_once()
+        mock_sleep.assert_called_once_with(5)
+        app._driver.close.assert_called_once()
+        mock_run.assert_called_once_with(
+            ["sudo", "systemctl", "poweroff"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    @patch("writerdeck.core.app.time.sleep")
+    @patch("writerdeck.core.app.subprocess.run")
+    def test_poweroff_still_issued_if_wipe_fails(self, mock_run, mock_sleep, tmp_path):
+        mock_run.return_value.returncode = 0
+        app = _make_app_with(tmp_path)
+        app._driver.close.side_effect = RuntimeError("panel dead")
+        app._startup_low_battery_shutdown(5)  # must not raise
+        mock_run.assert_called_once()
 
 
 class TestPygameDriverOrdering:

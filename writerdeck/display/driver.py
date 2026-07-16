@@ -389,10 +389,21 @@ class EPaperDriver:
                 logger.info("EPaperDriver sleeping")
 
     def close(self) -> None:
-        # Idempotent: skip the Clear() if already slept so double-invocation
-        # (signal handler + atexit) is safe and never raises.
+        # Always wipe to white before the panel powers off, regardless of prior
+        # sleep state — a shutdown (planned or critical-battery) can leave the
+        # panel unpowered for a long stretch before the next charge/boot, and a
+        # static high-contrast page left on the glass risks inerasable ghosting
+        # (see the retention note in refresh_manager's Good Display sourcing).
+        # Deep-sleep leaves controller RAM unusable, so a slept panel must be
+        # re-initialised before Clear() will work. Idempotent: double-invocation
+        # (signal handler + atexit) is safe — the second call just re-wakes,
+        # clears, and re-sleeps again, which is harmless.
         with self._lock:
-            if self._epd is not None and not self._slept:
+            if self._epd is not None:
+                if self._slept:
+                    self._epd.init_fast()
+                    self._mode = "fast"
+                    self._slept = False
                 self._epd.Clear()
             self.sleep()
 

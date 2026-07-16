@@ -6,7 +6,7 @@ partial_refresh_max_streak: 5
 idle_full_refresh_seconds: 10
 full_refresh_max_seconds: 300  # wall-clock backstop: force a full refresh at least this often
 display_idle_sleep_seconds: 20  # deep-sleep the panel after this many seconds of no keystroke
-display_screensaver_seconds: 1800  # LONG-3: blank to a white "paused" frame before long-idle deep sleep (0 = disabled)
+display_screensaver_seconds: 300  # LONG-3: blank to a white "paused" frame after this much total idle time, independent of panel sleep (0 = disabled)
 keyboard_device: auto
 keyboard_input: auto  # auto | stdin | evdev | pygame
 mode_order:
@@ -16,7 +16,7 @@ mode_order:
 documents_dir: ~/Documents/writer-deck
 autosave_interval_seconds: 90
 battery_warning_percent: 15
-battery_shutdown_percent: 3
+battery_shutdown_percent: 10  # runtime critical-shutdown AND the startup low-battery gate both use this; PiSugar's own auto_shutdown_level should be set lower as a backstop only
 enable_battery_monitor: true
 pisugar_socket: /tmp/pisugar-server.sock
 log_dir: ~/.config/writer-deck/logs

@@ -124,13 +124,11 @@ class App:
         self._headless_retry_secs = 30.0
         self._last_headless_retry = 0.0
 
-        # LONG-3: screensaver state. Before the long-idle deep-sleep tier we paint
-        # a mostly-white "paused" frame so a static high-contrast page doesn't sit
-        # on the panel for hours. Tracked so it's painted exactly once per idle.
+        # LONG-3: screensaver state. During long idle we paint a mostly-white
+        # "paused" frame so a static high-contrast page doesn't sit on the panel
+        # for hours, regardless of whether Tier-1 has already put the panel to
+        # sleep. Tracked so it's painted exactly once per idle stretch.
         self._screensaver_shown = False
-        # Logged once if the configured screensaver time is >= the effective
-        # display-sleep trigger (so the screensaver can never fire before sleep).
-        self._screensaver_disabled_warned = False
 
         # Low-battery warning state — warn once per low episode (reset when the
         # battery is no longer low) so an idle user actually sees the warning
@@ -185,6 +183,21 @@ class App:
         if not self._hw.is_pi:
             self._driver.init()
 
+        # Startup low-battery gate: refuse to start the writing UI on a
+        # critically low, unplugged battery — better to send the user to a
+        # charger up front than to let them start typing into a session
+        # that's about to die uncleanly. Charging is exempt: if they've
+        # already plugged in, there's no reason to block normal use.
+        if self._config.enable_battery_monitor:
+            self._power.check_now()
+            if (
+                self._power.available
+                and not self._power.is_charging
+                and self._power.battery_level < self._config.battery_shutdown_percent
+            ):
+                self._startup_low_battery_shutdown(self._power.battery_level)
+                return
+
         # Splash screen
         from writerdeck.display.splash import render_splash
         try:
@@ -237,23 +250,12 @@ class App:
             display_off_secs = idle_sleep_secs
 
         # LONG-3: paint a white "paused" screensaver frame this many seconds into
-        # idle, before the panel deep-sleeps, so a static page doesn't burn in.
-        # Fires at its configured time (0 = disabled). If it is >= the effective
-        # display-sleep trigger it can never fire before sleep — warn once and
-        # treat it as disabled rather than silently clamping it earlier.
+        # idle, so a static page doesn't burn in over a long stretch. Independent
+        # of the Tier-1 display-sleep trigger — it fires on total idle time even
+        # if the panel already went to sleep first (the common case, since
+        # display_idle_sleep_seconds is much shorter than this by design);
+        # _show_screensaver() handles waking/re-sleeping the panel as needed.
         screensaver_secs = self._config.display_screensaver_seconds
-        if (
-            screensaver_secs > 0
-            and display_off_secs > 0
-            and screensaver_secs >= display_off_secs
-            and not self._screensaver_disabled_warned
-        ):
-            self._screensaver_disabled_warned = True
-            logger.warning(
-                "display_screensaver_seconds=%d >= display-sleep trigger %ds; "
-                "screensaver disabled (panel sleeps first)",
-                screensaver_secs, display_off_secs,
-            )
 
         while self._running:
             # Pump events for poll-based readers (e.g. PygameKeyboardReader)
@@ -291,13 +293,10 @@ class App:
             # Sleep tier checks
             idle_secs = time.monotonic() - self._last_keypress
 
-            # LONG-3: screensaver — blank to white just before the panel sleeps.
-            # Fires at its configured time (not min-clamped); the loop guarantees
-            # it only fires while awake and before the sleep trigger elsewhere.
+            # LONG-3: screensaver — blank to white once total idle time crosses
+            # the threshold, whether or not the panel already went to sleep.
             if (
                 screensaver_secs > 0
-                and screensaver_secs < display_off_secs
-                and not self._display_sleeping
                 and not self._headless
                 and not self._screensaver_shown
                 and idle_secs > screensaver_secs
@@ -464,9 +463,9 @@ class App:
             self._refresh.request_full()
             return True
         if action == KeyAction.FONT_MENU:
-            from writerdeck.display.fonts import list_available_fonts
+            from writerdeck.display.fonts import list_available_fonts_labeled
             from writerdeck.modes.font_picker import FontPickerOverlay
-            self._overlay = FontPickerOverlay(list_available_fonts())
+            self._overlay = FontPickerOverlay(list_available_fonts_labeled())
             self._refresh.request_full()
             return True
         if action == KeyAction.OUTLINE:
@@ -698,18 +697,28 @@ class App:
     # -- LONG-3 screensaver / FAULT-7 headless ----------------------------
 
     def _show_screensaver(self) -> None:
-        """Paint a mostly-white 'paused' frame before long-idle deep sleep (LONG-3).
+        """Paint a mostly-white 'paused' frame during long idle (LONG-3).
 
         A full refresh so the previous high-contrast page is fully cleared to
-        white (retention mitigation). On the next keystroke the app wakes and
-        forces a full refresh, restoring the page. Any display failure degrades
-        to headless rather than crashing.
+        white (retention mitigation). Fires on total idle time regardless of
+        whether Tier-1 already put the panel to sleep — the common case, since
+        display_idle_sleep_seconds is much shorter than this by design. If the
+        panel is already asleep, wake it just for this paint and put it straight
+        back to sleep afterward (this does not disturb _sleep_started_at, so the
+        post-wake GC16 deep-clean timer still measures from the original sleep).
+        On the next keystroke the app wakes and forces a full refresh, restoring
+        the page. Any display failure degrades to headless rather than crashing.
         """
         from writerdeck.display.splash import render_paused
         self._screensaver_shown = True
+        was_sleeping = self._display_sleeping
         try:
+            if was_sleeping:
+                self._driver.wake()
             self._driver.display_full(render_paused())
-            logger.info("Screensaver shown (blanked to white before deep sleep)")
+            logger.info("Screensaver shown (blanked to white during long idle)")
+            if was_sleeping:
+                self._driver.sleep()
         except DisplayError:
             self._enter_headless()
         except Exception as e:
@@ -852,6 +861,44 @@ class App:
 
     # -- Emergency / Shutdown ----------------------------------------------
 
+    def _startup_low_battery_shutdown(self, level: int) -> None:
+        """Startup gate: battery is critically low and not charging.
+
+        Shows a "plug in the charger" message (long enough to actually read
+        it), then wipes the panel and powers the device off rather than
+        entering the normal main loop. No subsystems (keyboard/power monitor/
+        session) have been started yet at this point, so there's nothing else
+        to tear down first.
+        """
+        from writerdeck.display.splash import render_low_battery
+        logger.warning(
+            "Battery too low to start (%d%%, not charging) — showing charge "
+            "prompt and powering off",
+            level,
+        )
+        try:
+            self._driver.display_full(render_low_battery(level))
+        except Exception:
+            logger.exception("Failed to render low-battery startup message")
+        time.sleep(5)
+        try:
+            self._driver.close()  # wipes to white before power-off
+        except Exception:
+            logger.exception("Failed to wipe panel before low-battery poweroff")
+        try:
+            result = subprocess.run(
+                ["sudo", "systemctl", "poweroff"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    "poweroff exited %d: %s", result.returncode, result.stderr.strip()
+                )
+        except Exception:
+            logger.exception("Failed to issue poweroff")
+
     def emergency_save(self) -> None:
         """Best-effort save of all state. Never raises."""
         try:
@@ -863,7 +910,10 @@ class App:
         except Exception:
             pass
         try:
-            self._driver.sleep()
+            # close() (not bare sleep()) so a critical-battery shutdown also
+            # wipes the panel to white before power-off — this may be the last
+            # chance to do so before the device sits unpowered for a while.
+            self._driver.close()
         except Exception:
             pass
 
