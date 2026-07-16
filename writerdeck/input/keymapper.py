@@ -174,6 +174,13 @@ class KeyMapper:
                     return KeyAction.SELECT_WORD_RIGHT, ""
                 if scancode == _KEY_F:
                     return KeyAction.FONT_MENU, ""
+                if scancode == _KEY_UP:
+                    # No physical Home/End key on this keyboard; Ctrl+Up/Down
+                    # are already Page Prev/Next, so Home/End move to
+                    # Ctrl+Shift+Up/Down instead.
+                    return KeyAction.HOME, ""
+                if scancode == _KEY_DOWN:
+                    return KeyAction.END, ""
                 return KeyAction.UNKNOWN, ""
             # Ctrl-only combos
             if scancode == _KEY_S:

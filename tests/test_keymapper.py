@@ -178,6 +178,22 @@ class TestCtrlCombos:
         action, _ = m.process_event(33, 1)
         assert action == KeyAction.FONT_MENU
 
+    def test_ctrl_shift_up_home(self):
+        # No physical Home key on this keyboard; Ctrl+Up is already Page
+        # Prev, so Home is remapped to Ctrl+Shift+Up.
+        m = KeyMapper()
+        m.process_event(29, 1)
+        m.process_event(42, 1)
+        action, _ = m.process_event(103, 1)
+        assert action == KeyAction.HOME
+
+    def test_ctrl_shift_down_end(self):
+        m = KeyMapper()
+        m.process_event(29, 1)
+        m.process_event(42, 1)
+        action, _ = m.process_event(108, 1)
+        assert action == KeyAction.END
+
     def test_ctrl_unknown_key_returns_unknown(self):
         m = KeyMapper()
         m.process_event(29, 1)
