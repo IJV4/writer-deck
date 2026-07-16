@@ -187,9 +187,9 @@ Overlays (`FilePickerOverlay`, `FontPickerOverlay`, `FindOverlay`) intercept all
 
 `detect_platform()` (`writerdeck/utils/platform.py`) reads `/proc/device-tree/model` to distinguish Pi Zero 2 W, Pi 5, other Pi, and desktop. The result (`HardwareProfile`) determines default render interval and font size, and whether real hardware drivers are used.
 
-`Power` (`writerdeck/utils/power.py`) polls a PiSugar battery over a Unix socket, triggers low-battery warnings via `StatusBar`, and calls an emergency shutdown callback at the critical threshold.
+`Power` (`writerdeck/utils/power.py`) polls a PiSugar battery over a Unix socket, triggers low-battery warnings via `StatusBar`, and calls an emergency shutdown callback at `battery_shutdown_percent` (default 10%) after `SHUTDOWN_DEBOUNCE_SAMPLES` consecutive critical, non-charging samples. `App.run()` also gates startup itself: if the battery reads below `battery_shutdown_percent` and isn't charging, it shows a charge-prompt message, waits 5s, wipes the panel (`EPaperDriver.close()`), and powers off instead of starting the editor (`App._startup_low_battery_shutdown()`). PiSugar's own firmware-level `auto_shutdown_level` (set directly on the Pi, outside this repo) should stay below `battery_shutdown_percent` — it's a hardware backstop only.
 
-Three idle sleep tiers (configurable in `sleep_tiers`): display off → CPU powersave governor → systemd suspend.
+Three idle sleep tiers (configurable in `sleep_tiers`): display off → CPU powersave governor → systemd suspend. In practice Tier 1 is driven by `display_idle_sleep_seconds` (default 20s) rather than `sleep_tiers.display_off_minutes`, which is only a fallback when the former is `0`. A separate `display_screensaver_seconds` (LONG-3, default 300s) trigger blanks the panel to solid white on total idle time, independent of whether Tier 1 already put it to sleep — `App._show_screensaver()` wakes the panel if needed, paints, and re-sleeps it.
 
 ### Deploy & the systemd unit (OPS-1 / OPS-2)
 

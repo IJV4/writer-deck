@@ -110,18 +110,25 @@ The active line stays fixed at ~40% from the top. Text scrolls upward as you typ
 | Shortcut | Action |
 |----------|--------|
 | Arrow keys | Move cursor |
-| Home / End | Jump to line start / end |
+| Ctrl+Shift+Up / Ctrl+Shift+Down | Jump to line start / end |
 | Ctrl+Left / Ctrl+Right | Jump by word |
 | Page Up / Page Down | Scroll page |
+
+This keyboard has no physical Home/End key. Ctrl+Up/Down are already Page Prev/Next
+and Ctrl+A/E are already Select-All/Export, so Home/End were mapped to the otherwise-unused
+Ctrl+Shift+Up/Down instead (`writerdeck/input/keymapper.py`).
 
 ### Selection
 
 | Shortcut | Action |
 |----------|--------|
 | Shift+Arrows | Select character by character |
-| Shift+Home / Shift+End | Select to line start / end |
 | Ctrl+Shift+Left / Right | Select by word |
 | Ctrl+A | Select all |
+
+> Select-to-line-start/end (`SELECT_HOME`/`SELECT_END`) is only reachable via a physical
+> Shift+Home/End key, which this keyboard doesn't have — not yet remapped to an alternate
+> combo. Tracked as future work alongside the rest of the 60%-keyboard key mapping.
 
 ### Files and Modes
 
@@ -179,7 +186,18 @@ Lists all documents in the documents directory. Navigate with Up/Down arrows, pr
 
 ### Font Picker (Ctrl+Shift+F)
 
-Lists all available system fonts. Navigate with Up/Down arrows, press Enter to apply the selected font, Escape to cancel. The change takes effect immediately.
+Lists installed system fonts (`.ttf` and `.otf`), one entry per family — weight/style
+variants (e.g. Lato's 18 files) and icon fonts (e.g. Font Awesome) are collapsed out or
+excluded so only genuinely distinct, readable typefaces show up. Each entry is rendered
+in its own typeface, with a Serif/Sans/Monospace typology label, so you can see its shape
+before selecting it. Navigate with Up/Down arrows (fast partial refresh — only opening and
+closing the picker does a full refresh), press Enter to apply, Escape to cancel. The change
+takes effect immediately.
+
+The Pi currently has Courier Prime, DejaVu (Sans/Sans Mono/Serif), EB Garamond, Hack, Lato,
+and Liberation (Mono/Sans/Serif) installed — all via `setup.sh`'s apt package list
+(`fonts-hack-ttf`, `fonts-liberation`, `fonts-courier-prime`, `fonts-ebgaramond`, `fonts-lato`,
+`fonts-dejavu-core`). None of these are guaranteed by the base Raspberry Pi OS image alone.
 
 ### Find / Replace (Ctrl+F)
 
@@ -204,19 +222,38 @@ Requires a PiSugar 3 Plus battery board. Enable in config with `enable_battery_m
 - Shows battery bar in Dashboard sidebar: `[■■■□□] 38%`
 - Estimates remaining hours based on drain rate history
 - Shows battery in other modes when level drops below `battery_warning_percent` (default 15%)
-- Auto-shuts down at `battery_shutdown_percent` (default 3%)
+- Auto-shuts down at `battery_shutdown_percent` (default 10%): autosaves, wipes the panel to
+  white, and issues `systemctl poweroff` after 3 consecutive critical (non-charging) samples
+
+### Startup Low-Battery Gate
+
+On boot, if the battery reads below `battery_shutdown_percent` and the device is **not**
+charging, Writer Deck refuses to start the editor. It shows a "Battery low (N%) / Please
+plug in the charger" message, waits 5 seconds, wipes the panel to white, and powers off. If
+the device is charging, it boots normally regardless of level. This is skipped entirely if
+`enable_battery_monitor` is off.
+
+`battery_shutdown_percent` is the primary, graceful cutoff (it drives both this startup gate
+and the runtime critical-shutdown path above). PiSugar's own firmware-level
+`auto_shutdown_level` (set in `/etc/pisugar-server/config.json` on the Pi, outside this repo)
+should stay **below** `battery_shutdown_percent` — it's a hardware backstop that only matters
+if the app-level shutdown somehow doesn't fire in time.
 
 ### Sleep Tiers
 
-Three progressive power-saving stages during idle periods:
+Three progressive power-saving stages during idle periods, plus an independent screensaver:
 
-| Tier | Default | Action | Wake |
+| Trigger | Default | Action | Wake |
 |------|---------|--------|------|
-| 1 | 5 min idle | Display off | Any keypress |
-| 2 | 15 min idle | CPU governor set to powersave | Any keypress |
-| 3 | 30 min idle | Full system suspend | Any keypress (GPIO) |
+| Tier 1 | 20s idle (`display_idle_sleep_seconds`) | Display deep-sleep (bistable — image stays visible, panel just stops drawing power) | Any keypress |
+| Screensaver | 5 min idle (`display_screensaver_seconds`) | Blank the panel to solid white (burn-in mitigation) | Any keypress |
+| Tier 2 | 15 min idle (`sleep_tiers.cpu_powersave_minutes`) | CPU governor set to powersave | Any keypress |
+| Tier 3 | 30 min idle (`sleep_tiers.system_suspend_minutes`) | Full system suspend | Any keypress (GPIO) |
 
-All tiers reverse instantly on keypress.
+The screensaver fires on total idle time independent of Tier 1 — it wakes the panel if
+already asleep, paints a blank white frame, and re-sleeps it, so a long-idle static page
+doesn't retain a ghost image. `sleep_tiers.display_off_minutes` is only a fallback for Tier 1
+when `display_idle_sleep_seconds` is set to `0`. All tiers reverse instantly on keypress.
 
 ---
 
@@ -240,7 +277,7 @@ partial_refresh_max_streak: 5       # Partial refreshes before a full one
 idle_full_refresh_seconds: 10       # Full refresh after N seconds idle
 full_refresh_max_seconds: 300       # Wall-clock backstop: force a full refresh at least this often
 display_idle_sleep_seconds: 20      # Deep-sleep the panel after N seconds of no keystroke
-display_screensaver_seconds: 1800   # Blank to a white "paused" frame before long-idle deep sleep (0 = disabled)
+display_screensaver_seconds: 300    # Blank to a white "paused" frame after this much total idle time, independent of panel sleep (0 = disabled)
 show_title_bar: true                # Show doc name at top
 idle_deep_clean_seconds: 300        # GC16 ghost-clear after N idle seconds (0 = disabled)
 
@@ -271,7 +308,7 @@ sleep_tiers:
   system_suspend_minutes: 30
 enable_battery_monitor: true
 battery_warning_percent: 15
-battery_shutdown_percent: 3
+battery_shutdown_percent: 10        # runtime critical-shutdown AND the startup low-battery gate both use this; PiSugar's own auto_shutdown_level should be set lower as a backstop only
 pisugar_socket: /tmp/pisugar-server.sock
 
 # Logging & metrics

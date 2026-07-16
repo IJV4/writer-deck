@@ -31,14 +31,18 @@ The visual design of the writer interface could be improved:
 The device uses a 60% keyboard (no function row, no dedicated navigation keys). Improve the mapping for missing keys:
 
 - **Page Up / Page Down** — currently mapped, but verify the 60% layout sends the right codes
-- **Home / End** — verify these are accessible without a function layer
+- ~~**Home / End** — verify these are accessible without a function layer~~ **DONE (2026-07-15):**
+  no physical Home/End key exists, so they're mapped to Ctrl+Shift+Up/Ctrl+Shift+Down instead —
+  verified live. `SELECT_HOME`/`SELECT_END` (Shift+Home/End) are still only reachable via a
+  physical Home key and remain unmapped; still open.
 - **Function key alternatives** — consider Fn+layer combos for missing keys
 - Review `writerdeck/input/keymapper.py` for any gaps in the current keymap
-- **`keyboard_input: auto` startup race** — found live 2026-07-12: device resolution runs once at
-  startup via `/dev/input/by-id`; if the USB keyboard hasn't finished re-enumerating yet (e.g. right
-  after a replug), it silently falls back to the first `/dev/input/event*` device instead of the
-  real keyboard, with no error logged. Needs a retry/re-resolve window or a loud warning on
-  fallback. See `writerdeck/input/keyboard.py::_resolve_device`.
+- ~~**`keyboard_input: auto` startup race**~~ **DONE (2026-07-15):** found live 2026-07-12; fixed by
+  extending the by-id resolve retry to 20 attempts × 1s (udev can take ~13s to recreate device
+  nodes after a USB replug) and periodically re-checking for the real keyboard while running on a
+  guessed fallback device, so a wrong initial guess self-corrects instead of sticking until a
+  service restart. Verified live: disconnect → 20 retries → guessed fallback (logged as such) →
+  upgraded to the real keyboard 3s later. See `writerdeck/input/keyboard.py`.
 
 ### File Management Improvements
 

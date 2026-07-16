@@ -400,3 +400,63 @@ virtual input) instead, leaving the app completely unresponsive to real keystrok
 logged. A subsequent restart (once USB had settled) picked the correct device. Not fixed this
 session — tracked as a follow-up to add a retry/re-resolve window (or at least a loud warning) so a
 slow USB re-enumeration doesn't silently strand the device.
+
+**Fixed 2026-07-15** — see the entry below.
+
+---
+
+## 2026-07-15: screensaver fix, shutdown hardening, font picker rework, keyboard self-correction
+
+All items below were verified live on the Pi and merged to `master` (`3b2dc80`).
+
+**LONG-3 screensaver was structurally dead code.** Its trigger required
+`display_screensaver_seconds < display_off_secs`, but an earlier change had lowered Tier-1's own
+trigger (`display_idle_sleep_seconds`) to 20s, so no sensible screensaver value could ever satisfy
+that gate — the screensaver could never fire. Fixed by decoupling the screensaver entirely from
+Tier-1: it now fires on total idle time independent of whether the panel already slept, waking the
+panel if needed, painting a blank white frame, and re-sleeping it (`App._show_screensaver()`).
+Default raised 1800s → 300s (5 min) since it no longer needs to stay below Tier-1's threshold.
+
+**Shutdown paths didn't always wipe the panel.** `EPaperDriver.close()` and `App.emergency_save()`
+both skipped the panel wipe if the display was already asleep (`if not self._slept`). Root-caused
+via journalctl after a real incident: the Pi's battery ran fully out overnight and the panel was
+left showing stale content instead of white. `close()` now always wipes to white before power-off
+regardless of prior sleep state.
+
+**Startup low-battery gate + threshold reordering.** Previously PiSugar's own firmware
+`auto_shutdown_level` (10%) fired *before* the app's own graceful `battery_shutdown_percent` (3%),
+so the app's autosave/wipe/poweroff path never actually got exercised in practice. Reordered:
+`battery_shutdown_percent` raised to 10% (primary, graceful cutoff), PiSugar's `auto_shutdown_level`
+lowered to 5% (hardware backstop only, configured directly on the Pi). Added a new startup gate in
+`App.run()`: if the battery reads below `battery_shutdown_percent` and isn't charging, show a
+charge-prompt message, wait 5s, wipe the panel, and power off instead of starting the editor —
+skipped if charging, regardless of level.
+
+**Font picker (Ctrl+Shift+F) rework.** `list_available_fonts()` was surfacing an icon font
+(`fontawesome-webfont.ttf`) as a selectable "font," and Lato's 18 weight/style files (Black,
+Hairline, Heavy, Semibold, Thin × regular/italic) each showed up as a separate entry instead of
+collapsing to one "Lato." Fixed the discovery/normalization logic, added `.otf` support, and
+installed a few more distinguishable font families (`fonts-liberation`, `fonts-courier-prime`,
+`fonts-ebgaramond`) so the picker has real serif/sans/mono variety. Each entry now renders in its
+own typeface (new `RenderFrame.line_fonts`) with a Serif/Sans/Monospace typology label, and the
+selection marker is drawn in a fixed font (new `RenderFrame.line_prefixes`) so entries stay
+left-aligned regardless of which typeface renders the label. Arrow-key navigation now uses partial
+refresh instead of forcing a full refresh on every keypress (only opening/closing the picker does).
+
+**Keyboard reconnect self-correction (closes the 2026-07-12 "bonus bug" above).** Extended the
+by-id resolve retry from 5×0.5s to 20×1s — udev can take ~13s to recreate device nodes after a USB
+replug, and the old budget could expire before any of them existed, at which point the fallback
+guess had nothing real to find and could latch onto an unrelated always-present node (e.g. an
+HDMI-CEC input). More importantly, added periodic re-checking while running on a guessed fallback
+device: if the guess was wrong, it now self-corrects to the real keyboard a few seconds later
+instead of staying stuck until a service restart. Verified live: disconnect → 20 retries → guessed
+fallback (logged as such) → upgraded to the real keyboard 3s later, confirmed with live typing.
+
+**Home/End keymapping.** This keyboard has no physical Home/End key. Mapped to Ctrl+Shift+Up/Down
+(Ctrl+Up/Down were already Page Prev/Next, Ctrl+A/E were already Select-All/Export). Shift+Home/End
+(`SELECT_HOME`/`SELECT_END`) remain unmapped — still only reachable via a physical Home key.
+
+Docs updated to match: `USER_GUIDE.md` (keyboard shortcuts, font picker, power management, sleep
+tiers, config reference), `CLAUDE.md` (platform/power section), `NEXT-STEPS.md` (checked off the
+two resolved keyboard TODOs), `setup.sh` (added the new font packages, made `fonts-lato` and
+`fonts-dejavu-core` explicit instead of relying on incidental transitive dependencies).
