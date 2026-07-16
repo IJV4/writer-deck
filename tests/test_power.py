@@ -68,6 +68,33 @@ class TestDrainRate:
         assert p.available is True
 
 
+class TestCheckNow:
+    """check_now() — a synchronous refresh for callers that can't wait for
+    the async monitor thread's first poll (the startup low-battery gate)."""
+
+    def test_check_now_calls_update(self):
+        p = Power(enabled=False)
+        with mock.patch.object(p, "_update") as mock_update:
+            p.check_now()
+        mock_update.assert_called_once()
+
+    def test_check_now_populates_fresh_state(self):
+        p = Power(enabled=False)
+
+        def fake_query(cmd):
+            if cmd == "get battery":
+                return "battery: 7"
+            if cmd == "get battery_charging":
+                return "battery_charging: false"
+            return None
+
+        with mock.patch.object(p, "_query", side_effect=fake_query):
+            p.check_now()
+        assert p.available is True
+        assert p.battery_level == 7
+        assert p.is_charging is False
+
+
 def _run_monitor_with_readings(p, readings):
     """Drive Power._monitor_loop over a scripted list of (level, charging) samples.
 

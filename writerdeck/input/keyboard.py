@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import select
 import threading
 import time
 from collections.abc import Callable
@@ -16,8 +17,25 @@ logger = logging.getLogger(__name__)
 # When device_path == "auto" and the stable by-id keyboard symlink isn't
 # present yet (USB still enumerating at boot), retry the resolve a few times
 # with a short sleep before falling back to a guessed event* node.
-_AUTO_RESOLVE_ATTEMPTS = 5
-_AUTO_RESOLVE_SLEEP = 0.5
+#
+# Measured on real hardware (Pi Zero 2W, USB keyboard unplug/replug): udev
+# doesn't recreate the by-id symlink until ~13s after the replug — the kernel
+# removes and recreates ALL of the keyboard's /dev/input/eventN nodes during
+# re-enumeration, so a short retry budget can expire while none of them exist
+# yet, at which point the fallback guess has nothing real to find and can
+# latch onto an unrelated, always-present node (e.g. the HDMI-CEC remote
+# input) instead. 20 attempts * 1s gives a comfortable margin over that.
+_AUTO_RESOLVE_ATTEMPTS = 20
+_AUTO_RESOLVE_SLEEP = 1.0
+
+# While running on a guessed fallback device (see _resolve_device_fallback),
+# poll for a real keyboard resolving at this interval instead of blocking
+# indefinitely on the guessed device's events. A guessed device is often a
+# stable, always-present node (e.g. the Pi's HDMI-CEC input) that never
+# itself disconnects — without this, once mis-guessed, the reader would
+# never notice the real keyboard's by-id symlink appearing later and input
+# would stay dead until a service restart.
+_GUESS_UPGRADE_CHECK_INTERVAL = 3.0
 
 
 class KeyboardReader:
@@ -35,6 +53,10 @@ class KeyboardReader:
         self._mapper = KeyMapper()
         self._thread: threading.Thread | None = None
         self._running = False
+        # True when the currently-open device came from _resolve_device_fallback
+        # rather than a confident by-id match — lets _read_loop know to keep
+        # checking for the real keyboard instead of trusting the guess forever.
+        self._is_guessed_device = False
 
     def start(self) -> None:
         self._running = True
@@ -82,25 +104,56 @@ class KeyboardReader:
         return None
 
     def _resolve_device_fallback(self) -> str | None:
-        """Last-resort guess: the first ``/dev/input/event*`` node.
+        """Last-resort guess when no by-id keyboard symlink was found in time.
+
+        Prefers a node that actually reports full alphanumeric keyboard
+        capability (has KEY_A in its EV_KEY set) over blindly taking the
+        alphabetically-first ``event*`` node — a real USB keyboard replug
+        removes and recreates ALL of its own event nodes, so mid-reconnect the
+        only node that happens to exist can be an unrelated, always-present
+        device (e.g. the Pi's HDMI-CEC remote input, which only exposes a
+        handful of IR remote keys, not a full keyboard). Falls back to the
+        old first-node behavior if capability inspection isn't available
+        (e.g. evdev missing) or nothing has full keyboard capability, so
+        `auto` still degrades to *something* rather than nothing.
 
         Only meaningful for ``auto``; for an explicit path there is nothing to
-        guess. Callers log loudly before using this, since it may not be a
-        keyboard at all.
+        guess. Callers log loudly before using this, since it may still not
+        be a keyboard.
         """
-        for p in sorted(Path("/dev/input").glob("event*")):
-            return str(p)
-        return None
+        candidates = sorted(Path("/dev/input").glob("event*"))
+        if not candidates:
+            return None
+
+        try:
+            import evdev  # type: ignore[import-untyped]
+
+            for p in candidates:
+                try:
+                    caps = evdev.InputDevice(str(p)).capabilities().get(
+                        evdev.ecodes.EV_KEY, []
+                    )
+                except OSError:
+                    continue
+                if evdev.ecodes.KEY_A in caps:
+                    return str(p)
+        except ImportError:
+            pass
+
+        return str(candidates[0])
 
     def _resolve_device_retrying(self) -> str | None:
         """Resolve the device, tolerating slow USB enumeration.
 
         For ``auto``, retry the by-id resolve a few times with a short sleep
         before falling back to a guessed ``event*`` node, logging a LOUD warning
-        when it does fall back so a mis-guess is diagnosable.
+        when it does fall back so a mis-guess is diagnosable. Sets
+        ``self._is_guessed_device`` so ``_read_loop`` knows whether to keep
+        checking for a better match once this device is open.
         """
         resolved = self._resolve_device()
         if resolved is not None or self._device_path != "auto":
+            self._is_guessed_device = False
             return resolved
 
         # by-id keyboard symlink not present yet — USB may still be enumerating.
@@ -110,6 +163,7 @@ class KeyboardReader:
             time.sleep(_AUTO_RESOLVE_SLEEP)
             resolved = self._resolve_device()
             if resolved is not None:
+                self._is_guessed_device = False
                 return resolved
 
         fallback = self._resolve_device_fallback()
@@ -121,6 +175,7 @@ class KeyboardReader:
                 _AUTO_RESOLVE_ATTEMPTS,
                 fallback,
             )
+        self._is_guessed_device = fallback is not None
         return fallback
 
     def _read_loop(self) -> None:
@@ -145,7 +200,20 @@ class KeyboardReader:
 
         while self._running:
             try:
-                for event in dev.read_loop():
+                # A guessed fallback device is often a stable, always-present
+                # node that never itself raises OSError (e.g. HDMI-CEC), so
+                # blocking indefinitely on it would mean never noticing the
+                # real keyboard resolving later. Poll with a short timeout
+                # instead of the blocking dev.read_loop() so we get a
+                # periodic checkpoint to attempt an upgrade.
+                r, _, _ = select.select(
+                    [dev.fd], [], [], _GUESS_UPGRADE_CHECK_INTERVAL
+                )
+                if not r:
+                    if self._is_guessed_device:
+                        dev = self._maybe_upgrade_from_guess(evdev, dev)
+                    continue
+                for event in dev.read():
                     if not self._running:
                         break
                     # EV_KEY = 1
@@ -161,6 +229,26 @@ class KeyboardReader:
                 logger.warning("Keyboard device disconnected, retrying in 2s…")
                 time.sleep(2)
                 dev = self._reconnect(evdev, dev)
+
+    def _maybe_upgrade_from_guess(self, evdev, dev):  # type: ignore[no-untyped-def]
+        """While running on a guessed fallback device, check for the real
+        by-id keyboard and switch over if it now resolves.
+
+        Uses the strict, non-retrying resolve (no sleeping — this runs on
+        every idle poll timeout) so it's cheap to call repeatedly. Returns the
+        (possibly unchanged) device handle.
+        """
+        resolved = self._resolve_device()
+        if resolved is None:
+            return dev
+        try:
+            new_dev = evdev.InputDevice(resolved)
+        except OSError:
+            return dev
+        logger.info("Upgraded from guessed device to confirmed keyboard %s", resolved)
+        self._is_guessed_device = False
+        self._mapper.reset()
+        return new_dev
 
     def _reconnect(self, evdev, dev):  # type: ignore[no-untyped-def]
         """Reopen the device after a disconnect.

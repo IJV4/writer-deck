@@ -57,6 +57,18 @@ class Power:
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._thread.start()
 
+    def check_now(self) -> None:
+        """Synchronously refresh battery/charging state once.
+
+        Used for a fresh reading before the async monitor thread has started
+        (e.g. the startup low-battery gate) — waiting for the thread's first
+        poll would race against callers that need a trustworthy value right
+        away. Reuses the same query logic the monitor loop runs on its
+        interval, so a caller sees identical fields (battery_level,
+        is_charging, is_low, available).
+        """
+        self._update()
+
     def stop(self) -> None:
         self._running = False
         # Join the monitor thread for graceful shutdown. Use a short timeout so a

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 
 from writerdeck.input.keyboard import KeyboardReader
 
@@ -163,3 +164,155 @@ class TestStop:
         # Never started — no thread to join.
         reader.stop()
         assert reader._running is False
+
+
+class _FakeEventPath:
+    """Minimal stand-in for Path("/dev/input/eventN") — glob() results."""
+
+    def __init__(self, name: str) -> None:
+        self._str = f"/dev/input/{name}"
+
+    def __str__(self) -> str:
+        return self._str
+
+    def __lt__(self, other: _FakeEventPath) -> bool:
+        return str(self) < str(other)
+
+
+class _FakeInputDir:
+    def __init__(self, entries: list[_FakeEventPath]) -> None:
+        self._entries = entries
+
+    def glob(self, pattern: str):
+        return iter(self._entries)
+
+
+class _FakeCapsInputDevice:
+    def __init__(self, caps: dict) -> None:
+        self._caps = caps
+
+    def capabilities(self):
+        return self._caps
+
+
+class _FakeEcodes:
+    EV_KEY = 1
+    KEY_A = 30
+
+
+class _FakeEvdevModule:
+    """Stand-in for the evdev module, keyed by device path string."""
+
+    ecodes = _FakeEcodes()
+
+    def __init__(self, caps_by_path: dict[str, dict]) -> None:
+        self._caps_by_path = caps_by_path
+
+    def InputDevice(self, path: str):  # noqa: N802 — mirror evdev's API
+        return _FakeCapsInputDevice(self._caps_by_path.get(path, {}))
+
+
+class TestMaybeUpgradeFromGuess:
+    """HIGH (found via real hardware): a guessed fallback device can be a
+    stable node (e.g. HDMI-CEC) that never itself disconnects, so the
+    OSError-driven reconnect path never re-fires once mis-guessed — input
+    stays dead until a service restart unless something else keeps checking
+    for the real keyboard.
+    """
+
+    def test_upgrades_when_real_device_resolves(self, monkeypatch):
+        reader = KeyboardReader(device_path="auto")
+        reader._is_guessed_device = True
+        reader._mapper.process_event(29, 1)  # Ctrl held during the guess
+        monkeypatch.setattr(reader, "_resolve_device", lambda: "/dev/input/event0")
+
+        fake = _FakeEvdev()
+        old_dev = "guessed-dev"
+        new_dev = reader._maybe_upgrade_from_guess(fake, old_dev)
+
+        assert new_dev == "dev:/dev/input/event0"
+        assert reader._is_guessed_device is False
+        assert reader._mapper._ctrl_held is False
+
+    def test_no_upgrade_when_real_device_not_yet_resolved(self, monkeypatch):
+        reader = KeyboardReader(device_path="auto")
+        reader._is_guessed_device = True
+        monkeypatch.setattr(reader, "_resolve_device", lambda: None)
+
+        fake = _FakeEvdev()
+        result = reader._maybe_upgrade_from_guess(fake, "guessed-dev")
+
+        assert result == "guessed-dev"
+        assert fake.opened == []
+        assert reader._is_guessed_device is True
+
+    def test_no_upgrade_when_open_fails(self, monkeypatch):
+        reader = KeyboardReader(device_path="auto")
+        reader._is_guessed_device = True
+        monkeypatch.setattr(reader, "_resolve_device", lambda: "/dev/input/event0")
+
+        fake = _FakeEvdev(raises=True)
+        result = reader._maybe_upgrade_from_guess(fake, "guessed-dev")
+
+        assert result == "guessed-dev"
+        assert reader._is_guessed_device is True
+
+
+class TestResolveFallback:
+    """MEDIUM (found via real hardware): a replug can transiently leave only
+    an unrelated, always-present node (e.g. HDMI-CEC) in /dev/input — the
+    fallback guess must prefer a node with real keyboard capability over
+    blindly taking the alphabetically-first event node.
+    """
+
+    def _patch_input_dir(self, monkeypatch, names: list[str]) -> list[_FakeEventPath]:
+        entries = [_FakeEventPath(n) for n in names]
+        fake_dir = _FakeInputDir(entries)
+        monkeypatch.setattr(
+            "writerdeck.input.keyboard.Path",
+            lambda p: fake_dir if p == "/dev/input" else __import__("pathlib").Path(p),
+        )
+        return entries
+
+    def test_prefers_keyboard_capable_node_over_first(self, monkeypatch):
+        # event2 (HDMI-CEC-like: no KEY_A) sorts before event5 (real keyboard).
+        self._patch_input_dir(monkeypatch, ["event2", "event5"])
+        fake_evdev = _FakeEvdevModule(
+            {
+                "/dev/input/event2": {_FakeEcodes.EV_KEY: [1, 2, 3]},  # no KEY_A
+                "/dev/input/event5": {_FakeEcodes.EV_KEY: [_FakeEcodes.KEY_A, 31]},
+            }
+        )
+        monkeypatch.setitem(sys.modules, "evdev", fake_evdev)
+
+        reader = KeyboardReader(device_path="auto")
+        assert reader._resolve_device_fallback() == "/dev/input/event5"
+
+    def test_falls_back_to_first_node_when_none_look_like_a_keyboard(
+        self, monkeypatch
+    ):
+        self._patch_input_dir(monkeypatch, ["event2", "event5"])
+        fake_evdev = _FakeEvdevModule(
+            {
+                "/dev/input/event2": {_FakeEcodes.EV_KEY: [1, 2]},
+                "/dev/input/event5": {_FakeEcodes.EV_KEY: [3, 4]},
+            }
+        )
+        monkeypatch.setitem(sys.modules, "evdev", fake_evdev)
+
+        reader = KeyboardReader(device_path="auto")
+        # No node has KEY_A — degrade to the old first-node guess rather than
+        # finding nothing at all.
+        assert reader._resolve_device_fallback() == "/dev/input/event2"
+
+    def test_falls_back_to_first_node_when_evdev_unavailable(self, monkeypatch):
+        self._patch_input_dir(monkeypatch, ["event2", "event5"])
+        monkeypatch.setitem(sys.modules, "evdev", None)  # forces ImportError
+
+        reader = KeyboardReader(device_path="auto")
+        assert reader._resolve_device_fallback() == "/dev/input/event2"
+
+    def test_returns_none_when_no_nodes_exist(self, monkeypatch):
+        self._patch_input_dir(monkeypatch, [])
+        reader = KeyboardReader(device_path="auto")
+        assert reader._resolve_device_fallback() is None

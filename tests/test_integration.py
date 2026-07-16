@@ -105,7 +105,9 @@ class TestSelection:
 
 class TestFontPicker:
     def test_navigate_and_select(self):
-        overlay = FontPickerOverlay(["Hack", "DejaVuSansMono", "Courier"])
+        overlay = FontPickerOverlay(
+            [("Hack", "Hack"), ("DejaVuSansMono", "DejaVuSansMono"), ("Courier", "Courier")]
+        )
         assert overlay._selected == 0
 
         overlay.handle_input(KeyAction.ARROW_DOWN, "")
@@ -115,7 +117,7 @@ class TestFontPicker:
         assert result == {"font": "DejaVuSansMono"}
 
     def test_escape_cancels(self):
-        overlay = FontPickerOverlay(["Hack"])
+        overlay = FontPickerOverlay([("Hack", "Hack")])
         result = overlay.handle_input(KeyAction.ESCAPE, "")
         assert result == {}
 

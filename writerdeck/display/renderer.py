@@ -42,7 +42,11 @@ def render(
     for i, line_text in enumerate(frame.text_lines):
         kind = frame.line_kinds[i] if frame.line_kinds else "body"
         row_font_size = font_size + HEADING_FONT_DELTA.get(kind, 0)
-        row_font = font if kind == "body" else get_font(font_family, row_font_size)
+        row_family = (frame.line_fonts[i] if frame.line_fonts else None) or font_family
+        if kind == "body" and row_family == font_family:
+            row_font = font
+        else:
+            row_font = get_font(row_family, row_font_size)
         line_height = row_font_size + 4
 
         # Blank line's worth of vertical space before a heading, unless it's
@@ -58,26 +62,36 @@ def render(
         strip_len = len(prefix) if (prefix and line_text.startswith(prefix)) else 0
         display_text = line_text[strip_len:]
 
+        # Fixed-font prefix (e.g. the font picker's "> " selection marker),
+        # drawn in the frame's default font so its width never shifts based
+        # on the row's own font override — the row's text then always starts
+        # at the same x regardless of which typeface it's rendered in.
+        row_x = frame.margin_left
+        line_prefix = frame.line_prefixes[i] if frame.line_prefixes else ""
+        if line_prefix:
+            draw_text_cached(draw, (row_x, y), line_prefix, font, fill=0)
+            row_x += round(text_width_cached(line_prefix, font))
+
         # Selection highlight (inverted region)
         if frame.selection is not None:
             _draw_selection_line(
                 draw, frame, row_font, i, display_text,
-                frame.margin_left, y, line_height, strip_len,
+                row_x, y, line_height, strip_len,
             )
 
-        draw_text_cached(draw, (frame.margin_left, y), display_text, row_font, fill=0)
+        draw_text_cached(draw, (row_x, y), display_text, row_font, fill=0)
 
         # Re-draw selected text in white on top of black highlight
         if frame.selection is not None:
             _draw_selected_text(
-                draw, frame, row_font, i, display_text, frame.margin_left, y, strip_len,
+                draw, frame, row_font, i, display_text, row_x, y, strip_len,
             )
 
         # Draw cursor on the active line
         if i == frame.cursor_line and frame.show_cursor:
             display_col = max(0, frame.cursor_col - strip_len)
             col_prefix = display_text[:display_col]
-            cx = frame.margin_left + round(
+            cx = row_x + round(
                 text_width_cached(col_prefix, row_font) if col_prefix else 0
             )
             draw.rectangle(
