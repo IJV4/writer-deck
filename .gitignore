@@ -14,3 +14,4 @@ htmlcov/
 .claude/
 .venv/
 .worktrees/
+.superpowers/
