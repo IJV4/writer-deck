@@ -4,6 +4,17 @@ A distraction-free writing device built on Raspberry Pi Zero 2 W with a Waveshar
 
 No notifications. No browser. Just writing.
 
+<p align="center">
+  <img src="docs/media/device-in-sun.jpg" alt="Writer Deck prototype: e-ink display readable in direct sunlight, Raspberry Pi and keyboard" width="380">
+  <img src="docs/media/demo.gif" alt="Typing in distraction-free mode, then switching to the dashboard" width="440">
+</p>
+
+The screens above are not photos or mockups. They come from the app's own render pipeline: a null display driver saves every frame as a PNG, which is also how the 877-test suite runs in under five seconds without the hardware.
+
+| Distraction-free (headings styled as you write) | Dashboard (words, session, daily goal) |
+|---|---|
+| ![Distraction-free mode](docs/media/distraction_free.png) | ![Dashboard mode](docs/media/dashboard.png) |
+
 ---
 
 ## Hardware
@@ -39,7 +50,7 @@ The Pi runs headlessly as a systemd service. The e-ink display retains its image
 
 ```bash
 # 1. Clone the repo onto the Pi (or deploy with deploy.sh from a dev machine)
-git clone https://github.com/youruser/writer-deck ~/writer-deck
+git clone https://github.com/IJV4/writer-deck ~/writer-deck
 cd ~/writer-deck
 
 # 2. Run setup (handles SPI/I2C, deps, venv, systemd service, PiSugar)
